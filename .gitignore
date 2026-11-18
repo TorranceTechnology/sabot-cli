@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Working documents, never tracked
+plans/
+research/
+
+# Editor and operating system files
+.obsidian/
+.DS_Store
