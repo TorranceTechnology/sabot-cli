@@ -1,0 +1,17 @@
+ruleset: driftwood
+schemaVersion: 1
+sources:
+  - key: dw1
+    note: src.dw1
+scope:
+  dw1: []
+extensions:
+  nodeTypes:
+    win-condition:
+      parent: rule-process
+      prefix: "win."
+      note: A rule that ends the match once a score or position is reached.
+  attributes:
+    launch-cost:
+      on: [action]
+      type: int

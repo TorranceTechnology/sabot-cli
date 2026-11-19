@@ -1,0 +1,160 @@
+# Benchmark queries for the Driftwood vault (vault/).
+#
+# Each query names a command and its arguments, as they follow `sabot <command>` with
+# `--vault vault --json` appended by the runner, and the expected answer.
+#
+# search:   expect.ids is the list of note ids. order: exact means the list order matters;
+#           order: set means compare as a set, and when `first` is present the first result
+#           must also equal it. An argument that contains a space is a phrase.
+# traverse: expect.rows lists id, distance and the name of the last edge on the first path
+#           found, in output order (distance, edge, id). The start note is never a row.
+#
+# Expectations were computed from the vault files by an independent script, using a plain
+# BM25 with the title weighted twice the body for the full-text rows. Words are runs of
+# lowercase ASCII letters and digits, so squall's is the two words squall and s; no stemming.
+version: 1
+vault: vault
+queries:
+- id: fm-1-status-or
+  group: front-matter
+  command: search
+  args: [--type, clause, --status, derived, --status, superseded]
+  description: 'Repeated options of one kind are ORed: clauses that are derived or superseded.'
+  expect:
+    order: exact
+    ids: [cl.hand-limit-draft, cl.tide-wrap-decision]
+- id: fm-2-link-valued
+  group: front-matter
+  command: search
+  args: [--where, part-of=ph.moor]
+  description: A link-valued property compares by target id.
+  expect:
+    order: exact
+    ids: [cl.hand-limit, cl.hand-limit-draft]
+- id: fm-3-list-contains
+  group: front-matter
+  command: search
+  args: [--where, tags=cargo]
+  description: key=value on a list property matches when the list contains the value.
+  expect:
+    order: exact
+    ids: [act.sail-out, ch.capacity, cl.overload, ct.cargo, ex.overload-wreck]
+- id: fm-4-not-equal
+  group: front-matter
+  command: search
+  args: [--type, zone, --where, visibility!=public]
+  description: Zones whose visibility is anything but public.
+  expect:
+    order: exact
+    ids: [zone.hand, zone.stock]
+- id: fm-5-substring
+  group: front-matter
+  command: search
+  args: [--type, clause, --where, title~tide]
+  description: Case-insensitive substring match on the title, combined with a type filter.
+  expect:
+    order: exact
+    ids: [cl.high-tide-float, cl.tide-stay, cl.tide-wrap]
+- id: ft-1-phrase
+  group: full-text
+  command: search
+  args: [wreck pile]
+  description: 'An argument holding a space is a phrase: the words must be adjacent in the title or the
+    body.'
+  expect:
+    order: set
+    ids: [cl.beach-effect, ph.ebb, proc.wreck-boat, zone.wreck]
+- id: ft-2-two-terms
+  group: full-text
+  command: search
+  args: [beaching, squall]
+  description: Terms are ORed for ranking; the one note holding both terms ranks first.
+  expect:
+    order: set
+    first: rpl.float-free
+    ids: [cl.beach-effect, cl.high-tide-float, cl.squall-play, ct.squall, dp.squall-target, kw.buoyant,
+      ph.flood, rpl.float-free, rul.buoyant-squall, tw.slack-water]
+- id: ft-3-title-vs-body
+  group: full-text
+  command: search
+  args: [stock]
+  description: A term in a title (weight 2) outranks the same term appearing only in bodies.
+  expect:
+    order: set
+    first: zone.stock
+    ids: [cl.launch-bonus, cl.setup, ph.ebb, zone.stock]
+- id: ft-4-type-filtered
+  group: full-text
+  command: search
+  args: [boat, --type, card-type]
+  description: Ranking happens only inside the filtered set; the card type titled Boat ranks first.
+  expect:
+    order: set
+    first: ct.boat
+    ids: [ct.boat, ct.cargo, ct.squall]
+- id: ft-5-no-match
+  group: full-text
+  command: search
+  args: [zeppelin]
+  description: A term that occurs nowhere returns an empty list with exit code 0.
+  expect:
+    order: exact
+    ids: []
+- id: tr-1-out
+  group: traversal
+  command: traverse
+  args: [act.launch-boat]
+  description: Outgoing edges at the default depth of one, ordered by edge name then id.
+  expect:
+    order: exact
+    rows:
+    - {id: con.launch-boat-command, distance: 1, edge: implemented-by}
+    - {id: ph.sail, distance: 1, edge: occurs-in}
+    - {id: zone.hand, distance: 1, edge: requires}
+    - {id: to.launch-boat, distance: 1, edge: tested-by}
+    - {id: tp.boat-launched, distance: 1, edge: triggers}
+- id: tr-2-in-inverse-names
+  group: traversal
+  command: traverse
+  args: [ph.sail, --direction, in]
+  description: 'Incoming edges are named by their inverse: defined-by, follows, has-part and hosts.'
+  expect:
+    order: exact
+    rows:
+    - {id: cl.turn-phases, distance: 1, edge: defined-by}
+    - {id: ph.ebb, distance: 1, edge: follows}
+    - {id: rp.sink-check, distance: 1, edge: has-part}
+    - {id: act.launch-boat, distance: 1, edge: hosts}
+    - {id: act.sail-out, distance: 1, edge: hosts}
+    - {id: tp.boat-launched, distance: 1, edge: hosts}
+- id: tr-3-depth-two
+  group: traversal
+  command: traverse
+  args: [ph.ebb, --edge, precedes, --depth, '2']
+  description: Two hops along the phase order.
+  expect:
+    order: exact
+    rows:
+    - {id: ph.sail, distance: 1, edge: precedes}
+    - {id: ph.flood, distance: 2, edge: precedes}
+- id: tr-4-edge-filter
+  group: traversal
+  command: traverse
+  args: [act.launch-boat, --edge, requires, --edge, occurs-in]
+  description: Only the named edges are followed; implemented-by, tested-by and triggers are left out.
+  expect:
+    order: exact
+    rows:
+    - {id: ph.sail, distance: 1, edge: occurs-in}
+    - {id: zone.hand, distance: 1, edge: requires}
+- id: tr-5-cycle
+  group: traversal
+  command: traverse
+  args: [ph.ebb, --edge, precedes, --edge, returns-to, --depth, '10']
+  description: The returns-to edge closes a loop; every phase appears once and the start note is not listed.
+  expect:
+    order: exact
+    rows:
+    - {id: ph.sail, distance: 1, edge: precedes}
+    - {id: ph.flood, distance: 2, edge: precedes}
+    - {id: ph.moor, distance: 3, edge: precedes}

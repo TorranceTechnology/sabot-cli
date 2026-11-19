@@ -1,0 +1,13 @@
+{"end":123,"locator":"goal","page":1,"parent":null,"start":0}
+{"end":41,"locator":"goal/first-to-bank","page":1,"parent":"goal","start":0}
+{"end":82,"locator":"goal/short-tide","page":1,"parent":"goal","start":42}
+{"end":123,"locator":"goal/full-tide","page":1,"parent":"goal","start":83}
+{"end":324,"locator":"turn","page":1,"parent":null,"start":125}
+{"end":179,"locator":"turn/refill-and-launch","page":1,"parent":"turn","start":125}
+{"end":245,"locator":"turn/load-cargo","page":1,"parent":"turn","start":180}
+{"end":288,"locator":"turn/sail-out","page":1,"parent":"turn","start":246}
+{"end":324,"locator":"turn/tide-rises","page":1,"parent":"turn","start":289}
+{"end":410,"locator":"danger","page":1,"parent":null,"start":326}
+{"end":372,"locator":"danger/squall-beaches","page":1,"parent":"danger","start":326}
+{"end":410,"locator":"danger/buoyant","page":1,"parent":"danger","start":373}
+{"end":443,"reason":"page furniture","skip":true,"start":412}
