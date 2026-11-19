@@ -32,12 +32,14 @@ jobs:
       - run: uv run ruff check
       - run: uv run ruff format --check
       - run: uv run mypy --strict src
+      # PDF tests for the default extractor (pypdf) run everywhere; the pdftotext test is
+      # required where Poppler is installed above and skipped on Windows.
       - name: Test (Poppler required)
         if: runner.os != 'Windows'
         env:
           SABOT_CLI_REQUIRE_PDFTOTEXT: "1"
         run: uv run pytest
-      - name: Test (no Poppler on this runner)
+      - name: Test (Poppler not installed; pdftotext test skipped)
         if: runner.os == 'Windows'
         run: uv run pytest
 

@@ -57,6 +57,59 @@ def test_editorial_change_needs_no_source_text(run_cli: CliRunner, tmp_path: Pat
     assert _classes(result)["substantive"] == []
 
 
+@pytest.mark.parametrize(
+    ("first_text", "second_text"),
+    [
+        pytest.param(
+            "1.1  The harbour master lowers the flag (at dawn).\n",
+            "1.1  The harbour master lowers the flag ( at dawn ) .\n",
+            id="spacing",
+        ),
+        pytest.param(
+            "1.1  The harbour master lowers the flag at dawn.\n",
+            "1.1  The har bour mas ter lowers the flag at dawn.\n",
+            id="split-words",
+        ),
+        pytest.param(
+            "1.1  The harbour master lowers the flag at dawn.\n",
+            "1.1  The harbour mas-\nter lowers the flag at dawn.\n",
+            id="hyphenated-line-break",
+        ),
+    ],
+)
+def test_extraction_differences_in_spacing_and_hyphenation_are_editorial(
+    run_cli: CliRunner, tmp_path: Path, first_text: str, second_text: str
+) -> None:
+    # Given two extractions of one rule that differ only in spacing, punctuation spacing or a
+    # hyphen at a line break
+    first = write_text(tmp_path / "e1.txt", first_text)
+    second = write_text(tmp_path / "e2.txt", second_text)
+    vault = segmented_vault(run_cli, tmp_path / "vault", {"dw1": first, "dw2": second})
+
+    # When they are diffed
+    result = _diff(run_cli, vault)
+
+    # Then the rule is editorial, not substantive, so a migration can re-point its citers
+    assert result.returncode == 0
+    assert _classes(result)["editorial"] == ["1.1"]
+    assert _classes(result)["substantive"] == []
+
+
+def test_a_one_word_change_is_still_substantive(run_cli: CliRunner, tmp_path: Path) -> None:
+    # Given two editions of one rule that differ in a single word
+    first = write_text(tmp_path / "e1.txt", "1.1  The harbour master lowers the flag at dawn.\n")
+    second = write_text(tmp_path / "e2.txt", "1.1  The harbour master lowers the flag at dusk.\n")
+    vault = segmented_vault(run_cli, tmp_path / "vault", {"dw1": first, "dw2": second})
+
+    # When they are diffed
+    result = _diff(run_cli, vault)
+
+    # Then the rule is substantive
+    assert result.returncode == 0
+    assert _classes(result)["substantive"] == ["1.1"]
+    assert _classes(result)["editorial"] == []
+
+
 def test_moved_with_edit_is_paired_when_text_is_given(
     run_cli: CliRunner, driftwood_vault: Path
 ) -> None:

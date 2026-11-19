@@ -6,7 +6,7 @@ The tools turn a published ruleset into a typed rules graph and help an agent wo
 
 ## Status
 
-Early. The `sabot` command exists with every command's options declared. Every command works except `search` and `traverse`; each of those exits 3 with the error code `not-implemented` until it is built. Planned, in order:
+Early. The `sabot` command exists with every command's options declared. Every command works. Planned, in order:
 
 - A schema for card-game rules graphs.
 - Graph tools: ingest, segment, lint, compile, coverage and edition diff.
@@ -36,7 +36,7 @@ Every command accepts `--json`, which writes one JSON document to stdout. Exit c
 
 ## Setup, run and test
 
-Prerequisites: [uv](https://docs.astral.sh/uv/) and Python 3.12 or later (development uses 3.14, set in `.python-version`). Poppler's `pdftotext` is needed only for PDF ingest, once that command exists; it is an external program, not a Python dependency.
+Prerequisites: [uv](https://docs.astral.sh/uv/) and Python 3.12 or later (development uses 3.14, set in `.python-version`). PDF ingest uses the `pypdf` extractor by default and needs nothing else. Poppler's `pdftotext` is optional: install it to use `ingest --extractor pdftotext`, and to run the one test that exercises it (the test is skipped when `pdftotext` is not on the `PATH`). It is an external program, not a Python dependency.
 
 ```sh
 uv sync                                  # create the environment from uv.lock
@@ -66,7 +66,8 @@ ci/                 content guard and its hash list
 
 Runtime dependencies are kept to the minimum and must be permissively licensed, with wheels for Linux, macOS and Windows, and no network or model use. `argparse` is used instead of a CLI framework.
 
-- `PyYAML`: reads note front matter and the ruleset file; the standard library has no YAML parser.
+- `PyYAML`: reads note front matter and the ruleset file; the standard library has no YAML parser. It uses libyaml when the installed wheel has it and falls back to its pure-Python parser otherwise.
+- `pypdf`: extracts text from PDF sources in its layout mode; the standard library has no PDF reader, and a pure-Python package keeps PDF ingest free of an external program. It has no runtime dependencies of its own.
 
 Adding a runtime dependency requires a line here stating why.
 

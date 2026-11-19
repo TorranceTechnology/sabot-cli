@@ -9,7 +9,10 @@ description = "Command-line tools for building games on the Sabot rules engine."
 readme = "README.md"
 license-files = ["LICENSE.md"]
 requires-python = ">=3.12"
-dependencies = ["PyYAML>=6.0"]
+dependencies = [
+    "pypdf>=7.1.1",
+    "PyYAML>=6.0",
+]
 
 [project.scripts]
 sabot = "sabot_cli.cli:main"

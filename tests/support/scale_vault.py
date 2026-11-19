@@ -197,7 +197,7 @@ def _normalise(text: str) -> str:
 
 
 def _editorial(text: str) -> str:
-    return re.sub(r"[^a-z0-9 ]", "", _normalise(text))
+    return re.sub(r"[^a-z0-9]", "", _normalise(text))
 
 
 def _digest(text: str) -> str:

@@ -1,7 +1,7 @@
 """The extracted text as lines with page numbers and offsets, and the text a range holds.
 
 Offsets are character offsets into the extracted text. A form feed starts a new page, which is
-how `pdftotext -layout` separates them; text without one is a single page.
+how `pdftotext -layout` and the `pypdf` extractor separate them; text without one is a single page.
 """
 
 import bisect

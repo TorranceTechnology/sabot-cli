@@ -1,16 +1,20 @@
 """Turn a source file into text: PDF through an external extractor, HTML and text in-process."""
 
+import io
 import re
 import shutil
 import subprocess
 from html.parser import HTMLParser
 from pathlib import Path
 
+import pypdf
+
 from sabot_cli.sources._types import ExtractedText, SourceError, SourceFormat
 
-# Names `--extractor` accepts for PDF input. A second entry here and a branch in
+# Names `--extractor` accepts for PDF input, the default first. An entry here and a branch in
 # `_extract_pdf` add an extractor without adding command surface.
-EXTRACTORS: tuple[str, ...] = ("pdftotext",)
+EXTRACTORS: tuple[str, ...] = ("pypdf", "pdftotext")
+DEFAULT_EXTRACTOR = EXTRACTORS[0]
 
 _VERSION = re.compile(r"pdftotext version (\S+)")
 _BLOCK_TAGS = frozenset(
@@ -21,10 +25,15 @@ _BLOCK_TAGS = frozenset(
 _SKIPPED_TAGS = frozenset({"head", "script", "style"})
 
 
-def extract_text(path: Path, fmt: SourceFormat) -> ExtractedText:
-    """Extract a source's text; raise `SourceError` when it cannot be read or extracted."""
+def extract_text(
+    path: Path, fmt: SourceFormat, extractor: str = DEFAULT_EXTRACTOR
+) -> ExtractedText:
+    """Extract a source's text; raise `SourceError` when it cannot be read or extracted.
+
+    `extractor` names the PDF tool and is ignored for other formats.
+    """
     if fmt == "pdf":
-        return _extract_pdf(path)
+        return _extract_pdf(path, extractor)
     try:
         text = path.read_bytes().decode("utf-8")
     except OSError as error:
@@ -38,12 +47,37 @@ def extract_text(path: Path, fmt: SourceFormat) -> ExtractedText:
     return ExtractedText(text, "text")
 
 
-def _extract_pdf(path: Path) -> ExtractedText:
+def _extract_pdf(path: Path, extractor: str) -> ExtractedText:
+    if not path.is_file():
+        raise SourceError("file-unreadable", "the file does not exist or is not a file")
+    if extractor == "pdftotext":
+        return _extract_with_pdftotext(path)
+    return _extract_with_pypdf(path)
+
+
+def _extract_with_pypdf(path: Path) -> ExtractedText:
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(path.read_bytes()))
+        pages = [page.extract_text(extraction_mode="layout") for page in reader.pages]
+    except OSError as error:
+        raise SourceError(
+            "file-unreadable", f"the file cannot be read: {error.strerror}"
+        ) from error
+    except Exception as error:
+        # pypdf raises its own errors for damaged or encrypted files but also bare ValueError,
+        # KeyError and TypeError from inside a malformed object; a narrower list would let some
+        # damaged files escape as a traceback instead of a refusal.
+        raise SourceError("extraction-failed", f"pypdf failed: {error}") from error
+    # Each page ends with a newline and a form feed, the way `pdftotext -layout` writes it, so
+    # page numbering in `segment` does not depend on the extractor.
+    text = "".join(f"{page.rstrip()}\n\f" if page.strip() else "\f" for page in pages)
+    return ExtractedText(text, f"pypdf {pypdf.__version__} layout")
+
+
+def _extract_with_pdftotext(path: Path) -> ExtractedText:
     executable = shutil.which("pdftotext")
     if executable is None:
         raise SourceError("extractor-missing", "pdftotext is not installed or not on the PATH")
-    if not path.is_file():
-        raise SourceError("file-unreadable", "the file does not exist or is not a file")
     command = [executable, "-layout", "-enc", "UTF-8", str(path.resolve()), "-"]
     done = subprocess.run(command, capture_output=True, check=False)
     if done.returncode != 0:

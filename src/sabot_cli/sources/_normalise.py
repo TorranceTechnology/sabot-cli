@@ -1,6 +1,6 @@
 """The two hash normalisers.
 
-Both are English-specific: the pronoun table and the quote characters assume English prose.
+Both are English-specific: the pronoun table assumes English prose.
 Every module that hashes text calls these, so a span hashes the same in every mode.
 """
 
@@ -23,14 +23,6 @@ _PRONOUNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
         (r"\bhim\b", "them"),
     )
 )
-_QUOTE_CHARACTERS = (
-    "'\"`"
-    "\N{LEFT SINGLE QUOTATION MARK}\N{RIGHT SINGLE QUOTATION MARK}"
-    "\N{SINGLE LOW-9 QUOTATION MARK}\N{SINGLE HIGH-REVERSED-9 QUOTATION MARK}"
-    "\N{LEFT DOUBLE QUOTATION MARK}\N{RIGHT DOUBLE QUOTATION MARK}"
-    "\N{DOUBLE LOW-9 QUOTATION MARK}\N{DOUBLE HIGH-REVERSED-9 QUOTATION MARK}"
-)
-_QUOTES = dict.fromkeys(map(ord, _QUOTE_CHARACTERS), None)
 
 
 def _collapse(text: str) -> str:
@@ -48,17 +40,23 @@ def normalise(text: str) -> str:
 
 
 def editorial(text: str) -> str:
-    """`normalise`, then pronouns unified and quotes and punctuation dropped.
+    """`normalise`, pronouns unified, then only the letters and digits kept.
 
-    A change that only swaps a pronoun or a punctuation mark leaves this form unchanged, which
-    is how an editorial edit is told from a substantive one without the source text.
+    Every other character is removed, whitespace included, so two extractions of one document
+    that differ only in spacing, hyphenation at a line break or punctuation give the same form.
+    That is how an editorial edit is told from a substantive one without the source text. The
+    cost is that words run together: texts differing only in where a space falls are not told
+    apart.
     """
     folded = normalise(text)
     for pattern, replacement in _PRONOUNS:
         folded = pattern.sub(replacement, folded)
-    unquoted = folded.translate(_QUOTES)
-    spaced = "".join(" " if unicodedata.category(c).startswith("P") else c for c in unquoted)
-    return _collapse(spaced)
+    return "".join(c for c in folded if _is_letter_or_digit(c))
+
+
+def _is_letter_or_digit(character: str) -> bool:
+    category = unicodedata.category(character)
+    return category.startswith("L") or category == "Nd"
 
 
 def digest(normalised: str) -> str:

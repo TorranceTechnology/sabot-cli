@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from conftest import FIXTURES, CliRunner
-from source_vaults import error_code, snapshot, vault_with_sources
+from source_vaults import error_code, require_pdftotext, snapshot, vault_with_sources
+from support.minimal_pdf import write_pdf
 from support.plant import plant
 
 RULES_E1 = FIXTURES / "rules-e1.txt"
@@ -353,3 +354,36 @@ def test_segment_refuses_text_that_is_not_utf8(run_cli: CliRunner, tmp_path: Pat
     # Then segment refuses naming the encoding
     assert result.returncode == 3
     assert error_code(result) == "text-undecodable"
+
+
+def test_both_pdf_extractors_yield_the_same_span_locators(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a generated PDF rules document: a title page, then numbered rules on later pages
+    require_pdftotext()
+    numbers = [f"{section}.{rule}" for section in (1, 2, 3) for rule in range(1, 21)]
+    rules = [f"{number}  The tide rule {number} applies." for number in numbers]
+    pdf = tmp_path / "rules.pdf"
+    write_pdf(pdf, ["Harbour rules", *[""] * 49, *rules])
+    records: dict[str, list[dict[str, object]]] = {}
+
+    # When it is ingested and segmented once with each extractor
+    for extractor in ("pypdf", "pdftotext"):
+        vault = vault_with_sources(run_cli, tmp_path / extractor)
+        text_out = tmp_path / f"{extractor}.txt"
+        ingest = run_cli(
+            "ingest", str(pdf), "--key", "dw1", "--label", "R", "--title", "Rules",
+            "--edition", "1", "--retrieved", "2026-11-19", "--extractor", extractor,
+            "--text-out", str(text_out), "--vault", str(vault),
+        )  # fmt: skip
+        assert ingest.returncode == 0, ingest.stderr
+        code, _ = _segment_rules(run_cli, vault, text_out)
+        assert code == 0
+        records[extractor] = _records(vault, "dw1")
+
+    # Then both span files hold the same locators, pages and primary hashes
+    def identity(record: dict[str, object]) -> tuple[object, ...]:
+        return (record["locator"], record["page"], record["sha256"], record["parent"])
+
+    assert [identity(r) for r in records["pypdf"]] == [identity(r) for r in records["pdftotext"]]
+    assert [r["locator"] for r in records["pypdf"] if r["kind"] == "span"] == numbers

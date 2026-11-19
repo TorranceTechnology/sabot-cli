@@ -1,10 +1,20 @@
 """Helpers shared by the ingest and segment tests: an empty vault holding ingested sources."""
 
+import os
+import shutil
 from pathlib import Path
+
+import pytest
 
 from conftest import CliResult, CliRunner
 
 RETRIEVED = "2026-11-19"
+
+
+def require_pdftotext() -> None:
+    """Skip the test when Poppler is absent, unless CI says this environment must have it."""
+    if shutil.which("pdftotext") is None and not os.environ.get("SABOT_CLI_REQUIRE_PDFTOTEXT"):
+        pytest.skip("pdftotext is not installed")
 
 
 def snapshot(directory: Path) -> dict[str, bytes]:

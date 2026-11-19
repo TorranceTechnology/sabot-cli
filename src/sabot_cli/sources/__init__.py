@@ -5,7 +5,7 @@ each reads `SpanIndex` and shares `_normalise`.
 """
 
 from sabot_cli.sources._diff import EditionDiff, MovedSpan, PairedSpan, diff_editions
-from sabot_cli.sources._extract import EXTRACTORS, extract_text
+from sabot_cli.sources._extract import DEFAULT_EXTRACTOR, EXTRACTORS, extract_text
 from sabot_cli.sources._files import check_key, read_edition_spans, read_text_file
 from sabot_cli.sources._migrate import (
     NoteMigration,
@@ -29,6 +29,7 @@ from sabot_cli.sources._types import (
 )
 
 __all__ = [
+    "DEFAULT_EXTRACTOR",
     "EXTRACTORS",
     "SOURCE_KEY_PATTERN",
     "CheckResult",

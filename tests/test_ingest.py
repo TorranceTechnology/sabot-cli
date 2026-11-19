@@ -1,18 +1,18 @@
 """ING-1 to ING-6: `ingest` records a source and refuses input it cannot register."""
 
 import hashlib
-import os
-import shutil
 from pathlib import Path
 
+import pypdf
 import pytest
 
-from conftest import FIXTURES, CliRunner
+from conftest import FIXTURES, CliResult, CliRunner
 from sabot_cli.vault import load_vault
 from source_vaults import (
     RETRIEVED,
     error_code,
     ingest_arguments,
+    require_pdftotext,
     snapshot,
     vault_with_sources,
 )
@@ -50,21 +50,50 @@ def test_ingest_records_hash_and_bytes_of_a_text_source(run_cli: CliRunner, tmp_
     assert _registered_keys(vault) == ["dw1"]
 
 
-def test_ingest_extracts_a_pdf_with_pdftotext(run_cli: CliRunner, tmp_path: Path) -> None:
-    # Given a generated PDF and an environment that either has pdftotext or may skip it
-    if shutil.which("pdftotext") is None and not os.environ.get("SABOT_CLI_REQUIRE_PDFTOTEXT"):
-        pytest.skip("pdftotext is not installed")
+def _ingest_pdf(
+    run_cli: CliRunner, pdf: Path, vault: Path, text_out: Path, *options: str
+) -> CliResult:
+    return run_cli(
+        "ingest", str(pdf), "--key", "pdf1", "--label", "P", "--title", "Sample PDF",
+        "--edition", "1", "--retrieved", RETRIEVED, "--text-out", str(text_out),
+        "--vault", str(vault), "--json", *options,
+    )  # fmt: skip
+
+
+def test_ingest_extracts_a_pdf_with_the_default_extractor(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a generated PDF and no --extractor option
     pdf = tmp_path / "sample.pdf"
     write_pdf(pdf, ["Harbour rules sample", "", "1. Tides", "1.1 The tide rises."])
     vault = vault_with_sources(run_cli, tmp_path / "vault")
     text_out = tmp_path / "out" / "sample.txt"
 
     # When it is ingested
-    result = run_cli(
-        "ingest", str(pdf), "--key", "pdf1", "--label", "P", "--title", "Sample PDF",
-        "--edition", "1", "--retrieved", RETRIEVED, "--text-out", str(text_out),
-        "--vault", str(vault), "--json",
-    )  # fmt: skip
+    result = _ingest_pdf(run_cli, pdf, vault, text_out)
+
+    # Then the text-out file holds its words and the note records pypdf, its version and mode
+    assert result.returncode == 0, result.stderr
+    text = text_out.read_text(encoding="utf-8")
+    assert "1.1 The tide rises." in text
+    assert text.endswith("\f")
+    extractor = _note_properties(vault, "pdf1")["extractor"]
+    assert extractor == f"pypdf {pypdf.__version__} layout"
+    assert result.json()["extractor"] == extractor
+
+
+def test_ingest_extracts_a_pdf_with_pdftotext_when_selected(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a generated PDF and an environment that either has pdftotext or may skip it
+    require_pdftotext()
+    pdf = tmp_path / "sample.pdf"
+    write_pdf(pdf, ["Harbour rules sample", "", "1. Tides", "1.1 The tide rises."])
+    vault = vault_with_sources(run_cli, tmp_path / "vault")
+    text_out = tmp_path / "out" / "sample.txt"
+
+    # When it is ingested with --extractor pdftotext
+    result = _ingest_pdf(run_cli, pdf, vault, text_out, "--extractor", "pdftotext")
 
     # Then the text-out file holds its words and the note names pdftotext as the extractor
     assert result.returncode == 0, result.stderr
@@ -75,7 +104,7 @@ def test_ingest_extracts_a_pdf_with_pdftotext(run_cli: CliRunner, tmp_path: Path
     assert extractor.endswith(" -layout")
 
 
-def test_ingest_refuses_a_pdf_when_pdftotext_is_absent(
+def test_ingest_refuses_pdftotext_when_it_is_absent(
     run_cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given a PDF and an environment without pdftotext on the path
@@ -85,16 +114,33 @@ def test_ingest_refuses_a_pdf_when_pdftotext_is_absent(
     before = snapshot(vault)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
 
-    # When the PDF is ingested
+    # When the PDF is ingested with --extractor pdftotext
     result = run_cli(
         "ingest", str(pdf), "--key", "pdf1", "--label", "P", "--title", "T", "--edition", "1",
-        "--retrieved", RETRIEVED, "--vault", str(vault), "--json",
+        "--retrieved", RETRIEVED, "--extractor", "pdftotext", "--vault", str(vault), "--json",
     )  # fmt: skip
 
     # Then ingest refuses with the missing extractor and writes nothing
     assert result.returncode == 3
     assert error_code(result) == "extractor-missing"
     assert snapshot(vault) == before
+
+
+def test_ingest_refuses_a_pdf_pypdf_cannot_read(run_cli: CliRunner, tmp_path: Path) -> None:
+    # Given a file that starts like a PDF but holds nothing pypdf can parse
+    pdf = tmp_path / "broken.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nthis is not a document\n")
+    vault = vault_with_sources(run_cli, tmp_path / "vault")
+    before = snapshot(vault)
+
+    # When it is ingested with the default extractor
+    result = _ingest_pdf(run_cli, pdf, vault, tmp_path / "out.txt")
+
+    # Then ingest refuses with an extraction failure and writes nothing
+    assert result.returncode == 3
+    assert error_code(result) == "extraction-failed"
+    assert snapshot(vault) == before
+    assert not (tmp_path / "out.txt").exists()
 
 
 def test_ingest_extracts_html_text_without_markup(run_cli: CliRunner, tmp_path: Path) -> None:

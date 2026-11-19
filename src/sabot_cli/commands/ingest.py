@@ -13,6 +13,7 @@ from sabot_cli.exit_codes import ExitCode
 from sabot_cli.output import JsonValue
 from sabot_cli.rules import RulesetError, load_ruleset, register_source
 from sabot_cli.sources import (
+    DEFAULT_EXTRACTOR,
     EXTRACTORS,
     SOURCE_KEY_PATTERN,
     ExtractedText,
@@ -62,7 +63,7 @@ def register(subparsers: Subparsers) -> None:
     parser.add_argument(
         "--extractor",
         metavar="NAME",
-        help=f"PDF text extractor, one of: {', '.join(EXTRACTORS)} (default: {EXTRACTORS[0]})",
+        help=f"PDF text extractor, one of: {', '.join(EXTRACTORS)} (default: {DEFAULT_EXTRACTOR})",
     )
     parser.add_argument(
         "--store", type=Path, metavar="DIR", help="private store to copy the file into"
@@ -138,7 +139,7 @@ def run(args: argparse.Namespace) -> int:
     fmt = args.format or _detect_format(args.file, data)
     assert fmt is not None  # _refusal turns an undetectable format into a refusal
     try:
-        extracted = extract_text(Path(args.file), fmt)
+        extracted = extract_text(Path(args.file), fmt, args.extractor or DEFAULT_EXTRACTOR)
     except SourceError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
     sha256 = hashlib.sha256(data).hexdigest()
