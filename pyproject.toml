@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sabot-cli"
+version = "0.1.0"
+description = "Command-line tools for building games on the Sabot rules engine."
+readme = "README.md"
+license-files = ["LICENSE.md"]
+requires-python = ">=3.12"
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+sabot = "sabot_cli.cli:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "types-PyYAML>=6.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sabot_cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "C4", "E", "F", "I", "PT", "RUF", "SIM", "UP"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
