@@ -6,7 +6,7 @@ The tools turn a published ruleset into a typed rules graph and help an agent wo
 
 ## Status
 
-Early. The `sabot` command exists with every command's options declared, and each command exits 3 with the error code `not-implemented` until it is built. Planned, in order:
+Early. The `sabot` command exists with every command's options declared. `init`, `compile` and `schema` work; each other command exits 3 with the error code `not-implemented` until it is built. Planned, in order:
 
 - A schema for card-game rules graphs.
 - Graph tools: ingest, segment, lint, compile, coverage and edition diff.
