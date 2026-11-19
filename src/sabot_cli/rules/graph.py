@@ -86,41 +86,12 @@ class Graph:
 
 @dataclass(frozen=True)
 class BuildProblem:
-    """Something that stops `compile_graph` from running; a stand-in for a lint finding."""
+    """An error finding that stops `compile_graph` from running, as `compile` reports it."""
 
     code: str
     note: str | None
     path: str
     message: str
-
-
-def buildability_problems(
-    vault: Vault, schema: Schema, ruleset: Ruleset
-) -> tuple[BuildProblem, ...]:
-    """Name what compile cannot survive: unreadable notes, duplicate ids and dangling links.
-
-    This is the minimal precondition `compile` checks while `rules.lint` is not available. It
-    is a stand-in for the lint classes `frontmatter-invalid`, `id-duplicate` and
-    `link-dangling`, and is replaced by a call to `lint` once that exists.
-    """
-    problems = [BuildProblem(p.code, None, p.path.as_posix(), p.message) for p in vault.problems]
-    edges = merge_extensions(schema, ruleset).edge_types
-    for note in vault.notes.values():
-        for link in note.links:
-            if (
-                link.property in edges
-                and link.target is not None
-                and link.target not in vault.notes
-            ):
-                problems.append(
-                    BuildProblem(
-                        "link-dangling",
-                        note.id,
-                        note.path.as_posix(),
-                        f"{link.property} points at the missing note {link.target!r}",
-                    )
-                )
-    return tuple(sorted(problems, key=lambda p: (p.path, p.code, p.message)))
 
 
 def compile_graph(vault: Vault, schema: Schema, ruleset: Ruleset) -> Graph:

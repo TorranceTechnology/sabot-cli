@@ -15,11 +15,13 @@ from sabot_cli.output import JsonValue
 from sabot_cli.rules import (
     RulesetError,
     compile_graph,
+    lint,
     load_ruleset,
     load_schema,
     merge_extensions,
 )
-from sabot_cli.rules.graph import BuildProblem, Graph, buildability_problems
+from sabot_cli.rules.graph import BuildProblem, Graph
+from sabot_cli.rules.lint import Severity
 from sabot_cli.rules.ruleset import Ruleset
 from sabot_cli.rules.schema import Schema
 from sabot_cli.vault import Vault, load_vault
@@ -40,13 +42,12 @@ def register(subparsers: Subparsers) -> None:
 
 
 def _lint_errors(vault: Vault, schema: Schema, ruleset: Ruleset) -> tuple[BuildProblem, ...]:
-    """The seam to lint: the errors that stop a compile, as `lint(..., strict=False)` reports.
-
-    It runs the minimal precondition in `rules.graph` because `rules.lint` does not exist yet.
-    Once it does, replace the body with a call to `sabot_cli.rules.lint.lint`, keep the findings
-    whose severity is error, convert them to `BuildProblem`, and delete the stand-in.
-    """
-    return buildability_problems(vault, schema, ruleset)
+    """The errors `lint` reports without `--strict`: what stops a compile."""
+    return tuple(
+        BuildProblem(finding.code, finding.note, finding.path, finding.message)
+        for finding in lint(vault, schema, ruleset)
+        if finding.severity is Severity.ERROR
+    )
 
 
 def run(args: argparse.Namespace) -> int:

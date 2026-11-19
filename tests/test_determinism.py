@@ -12,7 +12,15 @@ import pytest
 from conftest import CliResult, CliRunner
 from invocations import COMMAND_NAMES, invocation
 
-STUB_COMMANDS = frozenset(COMMAND_NAMES) - {"init", "compile", "schema"}
+STUB_COMMANDS = frozenset(COMMAND_NAMES) - {
+    "init",
+    "compile",
+    "schema",
+    "lint",
+    "coverage",
+    "ingest",
+    "segment",
+}
 
 COMMANDS = [
     pytest.param(

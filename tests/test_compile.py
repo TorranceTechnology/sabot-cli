@@ -1,7 +1,6 @@
 """CMP-1 to CMP-4: `compile` writes a deterministic graph and refuses what it cannot compile."""
 
 import json
-from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
@@ -64,16 +63,6 @@ def test_compile_refuses_each_defect_it_cannot_survive(
     assert [finding["class"] for finding in findings] == [defect]  # type: ignore[index, union-attr]
     assert {finding["severity"] for finding in findings} == {"error"}  # type: ignore[index, union-attr]
     assert not (driftwood_vault / GRAPH).exists()
-
-
-def test_the_lint_seam_is_replaced_when_rules_lint_exists() -> None:
-    # Given that compile asks `_lint_errors` in commands/compile.py whether a vault may compile
-    # When the real lint module appears
-    # Then this test fails: the seam must call it, the stand-in must go, and so must this test
-    assert find_spec("sabot_cli.rules.lint") is None, (
-        "sabot_cli.rules.lint exists: make commands/compile.py `_lint_errors` call it, delete "
-        "`buildability_problems` in rules/graph.py, then delete this test"
-    )
 
 
 def test_check_detects_a_stale_index(run_cli: CliRunner, driftwood_vault: Path) -> None:
@@ -161,7 +150,18 @@ def test_compile_out_writes_elsewhere_and_names_it_without_a_path(
 def test_compile_keeps_yes_and_dates_as_text_and_booleans_as_booleans(
     run_cli: CliRunner, driftwood_vault: Path
 ) -> None:
-    # Given a note edited the way Obsidian might: yes, a bare date and a number-like time
+    # Given a note edited the way Obsidian might: yes, a bare date and a number-like time,
+    # under attributes the ruleset declares as text
+    ruleset = driftwood_vault / "_ruleset.yaml"
+    ruleset.write_text(
+        ruleset.read_text(encoding="utf-8").replace(
+            "  attributes:\n",
+            "  attributes:\n    flavour: {type: text}\n    when: {type: text}\n"
+            "    clock: {type: text}\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
     note = driftwood_vault / "clauses" / "cl.setup.md"
     text = note.read_text(encoding="utf-8")
     note.write_text(
