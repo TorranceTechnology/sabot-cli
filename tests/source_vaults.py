@@ -52,3 +52,24 @@ def error_code(result: CliResult) -> object:
     error = result.json()["error"]
     assert isinstance(error, dict)
     return error["code"]
+
+
+def segment_arguments(source: Path, key: str) -> tuple[str, ...]:
+    """The `segment` arguments for a small numbered text with no title page."""
+    return ("segment", str(source), "--source", key, "--mode", "numbered", "--skip-pages", "0")
+
+
+def segmented_vault(run_cli: CliRunner, directory: Path, sources: dict[str, Path]) -> Path:
+    """An empty vault with each `{key: file}` ingested and then segmented in numbered mode."""
+    vault_with_sources(run_cli, directory, sources)
+    for key, source in sources.items():
+        result = run_cli(*segment_arguments(source, key), "--vault", str(directory))
+        assert result.returncode == 0, result.stderr
+    return directory
+
+
+def write_text(path: Path, text: str) -> Path:
+    """Write UTF-8 text with the line endings given, and return the path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode("utf-8"))
+    return path

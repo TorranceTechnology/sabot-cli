@@ -20,6 +20,9 @@ STUB_COMMANDS = frozenset(COMMAND_NAMES) - {
     "coverage",
     "ingest",
     "segment",
+    "diff-editions",
+    "migrate-edition",
+    "overlap",
 }
 
 COMMANDS = [

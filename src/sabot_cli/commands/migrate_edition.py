@@ -1,15 +1,29 @@
 """The `migrate-edition` command."""
 
 import argparse
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
-from sabot_cli.commands._options import (
-    Subparsers,
-    add_json_option,
-    add_vault_option,
-    refuse_not_implemented,
+from sabot_cli import output
+from sabot_cli.commands._options import Subparsers, add_json_option, add_vault_option
+from sabot_cli.exit_codes import ExitCode
+from sabot_cli.output import JsonValue
+from sabot_cli.rules import RulesetError, load_ruleset
+from sabot_cli.sources import (
+    NoteMigration,
+    SourceError,
+    check_key,
+    diff_editions,
+    plan_note_migration,
+    read_edition_spans,
+    rewrite_note_text,
+    stale_reason_to_write,
 )
+from sabot_cli.vault import load_vault
 
 NAME = "migrate-edition"
+
+_OUTCOME_NAMES = ("repointed", "stale-editorial", "stale-substantive", "stale-removed")
 
 
 def register(subparsers: Subparsers) -> None:
@@ -23,5 +37,119 @@ def register(subparsers: Subparsers) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    """Execute the command and return its exit code."""
-    return refuse_not_implemented(NAME, args)
+    """Execute the command and return its exit code.
+
+    Every note is planned and rewritten in memory first, so a note that cannot be edited safely
+    refuses the whole run before any file is written.
+    """
+    as_json = bool(args.json)
+    vault: Path = args.vault
+    old_key, new_key = str(args.old_key), str(args.new_key)
+    dry_run = bool(args.dry_run)
+    try:
+        load_ruleset(vault)
+        check_key(old_key)
+        check_key(new_key)
+        if old_key == new_key:
+            raise SourceError("editions-identical", "an edition cannot be migrated to itself")
+        old = read_edition_spans(vault, old_key)
+        new = read_edition_spans(vault, new_key)
+        diff = diff_editions(old, new)
+        loaded = load_vault(vault, frozenset())
+        outcomes: dict[str, list[str]] = {name: [] for name in _OUTCOME_NAMES}
+        unresolved: list[tuple[str, str]] = []
+        edits: dict[str, bytes] = {}
+        for note in sorted(loaded.notes.values(), key=lambda n: n.path.as_posix()):
+            cited = note.properties.get("source")
+            citations = [c for c in cited if isinstance(c, str)] if isinstance(cited, list) else []
+            migration = plan_note_migration(note.id, citations, diff, old, new)
+            if migration is None:
+                continue
+            unresolved += [(note.id, raw) for raw in migration.unresolved]
+            _file_outcome(outcomes, migration)
+            reason = stale_reason_to_write(note.properties, migration.reason)
+            if not migration.repoints and reason is None:
+                continue
+            file = vault / note.path
+            before = file.read_bytes().decode("utf-8")
+            after = rewrite_note_text(before, migration.repoints, reason)
+            if after != before:
+                edits[note.path.as_posix()] = after.encode("utf-8")
+    except RulesetError as error:
+        return output.refuse(NAME, error.code, error.message, as_json=as_json)
+    except (SourceError, OSError, UnicodeDecodeError) as error:
+        code = error.code if isinstance(error, SourceError) else "note-unreadable"
+        message = error.message if isinstance(error, SourceError) else "a note cannot be read"
+        return output.refuse(NAME, code, message, as_json=as_json)
+    if not dry_run:
+        for relative, data in edits.items():
+            (vault / relative).write_bytes(data)
+    moved_to = {m.new for m in diff.moved}
+    added = [locator for locator in diff.added if locator not in moved_to]
+    for name in outcomes:
+        outcomes[name].sort()
+    changed = sorted(edits)
+    if as_json:
+        output.write_json(
+            _document(old_key, new_key, dry_run, outcomes, added, changed, sorted(unresolved))
+        )
+    else:
+        output.write_text(_text(old_key, new_key, dry_run, outcomes, added, changed, unresolved))
+    return int(ExitCode.OK)
+
+
+def _file_outcome(outcomes: Mapping[str, list[str]], migration: NoteMigration) -> None:
+    if migration.outcome == "clean":
+        if migration.repoints:
+            outcomes["repointed"].append(migration.note_id)
+    else:
+        outcomes[f"stale-{migration.outcome}"].append(migration.note_id)
+
+
+def _document(
+    old_key: str,
+    new_key: str,
+    dry_run: bool,
+    outcomes: Mapping[str, Sequence[str]],
+    added: Sequence[str],
+    changed: Sequence[str],
+    unresolved: Sequence[tuple[str, str]],
+) -> dict[str, JsonValue]:
+    return {
+        "added": list(added),
+        "changed": list(changed),
+        "command": NAME,
+        "counts": {name: len(ids) for name, ids in outcomes.items()},
+        "dryRun": dry_run,
+        "format": output.FORMAT_VERSION,
+        "new": new_key,
+        "old": old_key,
+        "outcomes": {name: list(ids) for name, ids in outcomes.items()},
+        "unresolved": [{"note": note, "reference": raw} for note, raw in unresolved],
+        "written": not dry_run and bool(changed),
+    }
+
+
+def _text(
+    old_key: str,
+    new_key: str,
+    dry_run: bool,
+    outcomes: Mapping[str, Sequence[str]],
+    added: Sequence[str],
+    changed: Sequence[str],
+    unresolved: Sequence[tuple[str, str]],
+) -> str:
+    lines = [f"{old_key} -> {new_key}{' (dry run, nothing written)' if dry_run else ''}"]
+    for name, ids in outcomes.items():
+        lines.append(f"{name}: {len(ids)}")
+    lines.append(f"added spans to extract: {len(added)}")
+    lines.append(f"notes {'that would change' if dry_run else 'changed'}: {len(changed)}")
+    sections: list[tuple[str, list[str]]] = [
+        *((name, list(ids)) for name, ids in outcomes.items()),
+        ("added spans", list(added)),
+        ("unresolved citations", [f"{note}: {raw}" for note, raw in unresolved]),
+    ]
+    for name, items in sections:
+        if items:
+            lines += ["", f"{name}:", *(f"  {item}" for item in items)]
+    return "".join(f"{line}\n" for line in lines)
