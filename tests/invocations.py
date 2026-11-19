@@ -53,6 +53,10 @@ def invocation(name: str, workdir: Path) -> tuple[str, ...]:
         "overlap": ("--source-text", str(RULES_E1)),
         "schema": (),
         "search": ("tide",),
-        "traverse": ("ph.dw-combat",),
+        "traverse": (
+            "ph.sail",
+            "--direction",
+            "both",
+        ),
     }
     return arguments[name]
