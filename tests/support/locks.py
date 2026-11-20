@@ -16,11 +16,21 @@ def dead_process_id() -> int:
     return child.pid
 
 
-def write_lock(vault: Path, *, pid: object, host: str | None = None, start: object = None) -> None:
-    """Plant a lock naming `pid` on `host` (this host by default), with a start time if given."""
+def write_lock(
+    vault: Path,
+    *,
+    pid: object,
+    host: str | None = None,
+    start: object = None,
+    boot: object = None,
+) -> None:
+    """Plant a lock naming `pid` on `host` (this host by default), with a start time and a boot
+    identity if given."""
     holder: dict[str, object] = {"host": socket.gethostname() if host is None else host, "pid": pid}
     if start is not None:
         holder["start"] = start
+    if boot is not None:
+        holder["boot"] = boot
     (vault / LOCK_FILE).write_text(json.dumps(holder, sort_keys=True) + "\n", encoding="utf-8")
 
 

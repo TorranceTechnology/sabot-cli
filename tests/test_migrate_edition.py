@@ -1,6 +1,7 @@
 """MIG-1 to MIG-4: `migrate-edition` moves citations to the successor edition."""
 
 import difflib
+import os
 import re
 from pathlib import Path
 
@@ -362,4 +363,24 @@ def test_a_note_that_cannot_be_read_back_refuses_the_whole_run(
     # Then the run refuses as a note it cannot rewrite, and writes nothing
     assert result.returncode == 3
     assert error_code(result) == "migration-rewrite-invalid"
+    assert snapshot(driftwood_vault) == before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows cannot create a file name with a colon")
+@pytest.mark.parametrize("dry_run", [False, True], ids=["written", "dry run"])
+def test_a_note_whose_file_name_a_write_cannot_hold_refuses_the_run_cleanly(
+    dry_run: bool, run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a note that migration must rewrite, whose file name holds a colon
+    odd = driftwood_vault / "clauses" / "cl.setup:v1.md"
+    (driftwood_vault / "clauses" / "cl.setup.md").rename(odd)
+    before = snapshot(driftwood_vault)
+
+    # When the vault is migrated
+    result = _migrate(run_cli, driftwood_vault, *(("--dry-run",) if dry_run else ()))
+
+    # Then the run is refused with a message naming the file, and nothing was written
+    assert result.returncode == 3
+    assert error_code(result) == "note-name-unwritable"
+    assert "clauses/cl.setup:v1.md" in result.stdout
     assert snapshot(driftwood_vault) == before

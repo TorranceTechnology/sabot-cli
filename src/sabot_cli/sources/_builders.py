@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 
-from sabot_cli.sources._items import Continuation, Item
+from sabot_cli.sources._items import Continuation, ContinuationKind, Item
 from sabot_cli.sources._lines import Line, LineIndex, is_page_furniture
 from sabot_cli.sources._normalise import digest, normalise
 from sabot_cli.sources._sentences import split_sentences
@@ -16,6 +16,10 @@ _NUMBER_START: dict[Numbering, re.Pattern[str]] = {
     "dotted": re.compile(r"^(\d+(?:\.\d+)+\.?|\d+\.)\s+(?=\S)"),
     "dotted-letter": re.compile(r"^(\d+(?:\.\d+)+[a-z]?\.?|\d+\.)\s+(?=\S)"),
 }
+# What a line looks like when it appears to open a rule, in any of the forms a rule number is
+# written in: it is looser than `_NUMBER_START`, so that a line the strict pattern passes over is
+# still seen and reported.
+_NUMBER_LOOK = re.compile(r"^(\d+(?:\.\d+)*[a-z]?)[.)]?(?:\s|$)")
 _HEADING = re.compile(r"^(#{1,6})\s+(\S.*?)\s*#*\s*$")
 _SENTENCE_END = ".!?:;)\"'\u201d\u2019"
 
@@ -64,19 +68,29 @@ def _wraps_onto(
     return previous[-1] not in _SENTENCE_END and rest[:1].islower()
 
 
-def _prose_lines(index: LineIndex) -> Iterator[tuple[Line, bool]]:
-    """Lines that carry prose, each with whether a blank line (or the start) comes before it.
+def _prose_lines(index: LineIndex) -> Iterator[tuple[Line, bool, bool]]:
+    """Non-blank lines, each with whether a blank line (or the start) comes before it and whether
+    it is page furniture.
 
-    Page furniture is skipped without counting as a separator, since a page number can sit
-    between the halves of a wrapped line; a blank line does count.
+    Page furniture does not count as a separator, since a page number can sit between the
+    halves of a wrapped line; a blank line does. Callers skip furniture after noting any that
+    begins with a number.
     """
     separated = True
     for line in index.lines:
         if not line.text:
             separated = True
-        elif not is_page_furniture(line.text):
-            yield line, separated
+        elif is_page_furniture(line.text):
+            yield line, separated, True
+        else:
+            yield line, separated, False
             separated = False
+
+
+def _looks_numbered(text: str) -> str | None:
+    """The number a line appears to begin with, or None."""
+    match = _NUMBER_LOOK.match(text)
+    return match.group(1) if match else None
 
 
 def _nearest_numbered_parent(locator: str, known: set[str]) -> str | None:
@@ -110,8 +124,16 @@ class _Open:
         )
 
 
-def _continuation(index: LineIndex, line: Line, number: str, span: str) -> Continuation:
-    return Continuation(index.text.count("\n", 0, line.start) + 1, number, span)
+def _continuation(
+    index: LineIndex, line: Line, number: str, span: str | None, kind: ContinuationKind
+) -> Continuation:
+    return Continuation(index.text.count("\n", 0, line.start) + 1, number, span, kind)
+
+
+def _furniture(index: LineIndex, line: Line) -> Continuation | None:
+    """A page-furniture line that begins with a number: dropped, so in no span."""
+    number = _looks_numbered(line.text)
+    return None if number is None else _continuation(index, line, number, None, "furniture")
 
 
 def numbered(
@@ -119,15 +141,21 @@ def numbered(
 ) -> tuple[list[Item], list[Continuation]]:
     """One item per numbered line, continuation lines joined; parents follow the numbers.
 
-    The second result lists each numbered line that was read as a continuation instead of a
-    rule, so the decision is visible to whoever reviews the segmentation.
+    The second result lists each line that begins with a number and did not open a rule, so the
+    decision is visible to whoever reviews the segmentation: a wrapped decimal joined to the rule
+    before it, a line in a form no rule is read in, and a page-number or contents line that was
+    dropped.
     """
     pattern = _NUMBER_START[numbering]
     opened: list[_Open] = []
     continuations: list[Continuation] = []
     previous: str | None = None
-    for line, separated in _prose_lines(index):
+    for line, separated, furniture in _prose_lines(index):
         if line.page <= skip_pages:
+            continue
+        if furniture:
+            if (dropped := _furniture(index, line)) is not None:
+                continuations.append(dropped)
             continue
         match = pattern.match(line.text)
         wrapped = match is not None and _wraps_onto(
@@ -142,12 +170,16 @@ def numbered(
             opened.append(
                 _Open(match.group(1).rstrip("."), None, line.page, line.text_offset, line.text_end)
             )
-        elif opened:
+        else:
+            span = opened[-1].locator if opened else None
             if match is not None:
                 continuations.append(
-                    _continuation(index, line, match.group(1).rstrip("."), opened[-1].locator)
+                    _continuation(index, line, match.group(1).rstrip("."), span, "wrapped")
                 )
-            opened[-1].end = line.text_end
+            elif (looked := _looks_numbered(line.text)) is not None:
+                continuations.append(_continuation(index, line, looked, span, "unopened"))
+            if opened:
+                opened[-1].end = line.text_end
     known = {item.locator for item in opened}
     items = [
         replace(item.freeze(), parent=_nearest_numbered_parent(item.locator, known))
@@ -166,8 +198,8 @@ def slug(title: str) -> str:
 def headings(index: LineIndex, numbering: Numbering) -> tuple[list[Item], list[Continuation]]:
     """Items for `#` headings, with numbered lines under a heading as its children.
 
-    The second result lists each numbered line that was read as a continuation, as `numbered`
-    does.
+    The second result lists each line that begins with a number and did not open a rule, as
+    `numbered` does.
     """
     pattern = _NUMBER_START[numbering]
     opened: list[_Open] = []
@@ -176,7 +208,11 @@ def headings(index: LineIndex, numbering: Numbering) -> tuple[list[Item], list[C
     current: _Open | None = None
     previous: str | None = None
     used: set[str] = set()
-    for line, separated in _prose_lines(index):
+    for line, separated, furniture in _prose_lines(index):
+        if furniture:
+            if (dropped := _furniture(index, line)) is not None:
+                continuations.append(dropped)
+            continue
         heading = _HEADING.match(line.text)
         if heading is not None:
             level = len(heading.group(1))
@@ -201,6 +237,8 @@ def headings(index: LineIndex, numbering: Numbering) -> tuple[list[Item], list[C
             previous = None
             continue
         if not stack:
+            if (looked := _looks_numbered(line.text)) is not None:
+                continuations.append(_continuation(index, line, looked, None, "unopened"))
             continue
         number = pattern.match(line.text)
         if (
@@ -215,9 +253,12 @@ def headings(index: LineIndex, numbering: Numbering) -> tuple[list[Item], list[C
             )
         ):
             continuations.append(
-                _continuation(index, line, number.group(1).rstrip("."), current.locator)
+                _continuation(index, line, number.group(1).rstrip("."), current.locator, "wrapped")
             )
             number = None
+        elif number is None and (looked := _looks_numbered(line.text)) is not None:
+            owner_locator = current.locator if current is not None else None
+            continuations.append(_continuation(index, line, looked, owner_locator, "unopened"))
         previous = line.text
         if number is not None:
             owner = stack[-1][1].locator

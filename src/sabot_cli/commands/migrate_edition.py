@@ -20,7 +20,7 @@ from sabot_cli.sources import (
     read_span_file,
 )
 from sabot_cli.vault import TextFileError, decode_text, encode_text
-from sabot_cli.vault.transaction import Transaction, TransactionError
+from sabot_cli.vault.transaction import Transaction, TransactionError, is_vault_path
 
 NAME = "migrate-edition"
 
@@ -86,7 +86,16 @@ def _migrate(args: argparse.Namespace, transaction: Transaction | None, *, as_js
             before = decode_text(raw, note.path.name)
             after = rewrite_note_text(before, migration.repoints, reason)
             if after != before:
-                edits[note.path.as_posix()] = encode_text(after, like=raw)
+                relative = note.path.as_posix()
+                if not is_vault_path(relative):
+                    # A write cannot name this file (a colon or a backslash in its name, say), so
+                    # the whole run is refused before anything is written.
+                    raise SourceError(
+                        "note-name-unwritable",
+                        f"{relative} has a file name a write cannot hold, so its citations "
+                        "cannot be migrated; rename the note and run again",
+                    )
+                edits[relative] = encode_text(after, like=raw)
     except RulesetError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
     except SourceError as error:

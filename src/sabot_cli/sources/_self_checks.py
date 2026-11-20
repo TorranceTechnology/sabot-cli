@@ -88,8 +88,17 @@ def run_self_checks(records: Sequence[SpanRecord]) -> tuple[CheckResult, ...]:
     )
 
 
+def _natural_order(text: str) -> list[tuple[int, int, str]]:
+    """A sort key that puts `line 19` before `line 125`: digit runs compare as numbers."""
+    return [
+        (0, int(part), "") if part.isdigit() else (1, 0, part)
+        for part in re.split(r"(\d+)", text)
+        if part
+    ]
+
+
 def merge(*groups: Sequence[CheckResult]) -> tuple[CheckResult, ...]:
-    """Combine results that share a name, listing each failure once, ordered by name."""
+    """Combine results that share a name, listing each failure once, in natural order."""
     combined: dict[str, set[str]] = {}
     advisory: dict[str, bool] = {}
     for group in groups:
@@ -97,6 +106,6 @@ def merge(*groups: Sequence[CheckResult]) -> tuple[CheckResult, ...]:
             combined.setdefault(result.name, set()).update(result.failures)
             advisory[result.name] = advisory.get(result.name, True) and result.advisory
     return tuple(
-        CheckResult(name, tuple(sorted(found)), advisory[name])
+        CheckResult(name, tuple(sorted(found, key=_natural_order)), advisory[name])
         for name, found in sorted(combined.items())
     )

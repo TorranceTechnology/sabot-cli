@@ -67,7 +67,7 @@ def register(subparsers: Subparsers) -> None:
         "--strict-numbering",
         action="store_true",
         help=(
-            "fail when a numbered line was read as a continuation of the rule before it "
+            "fail when a line that begins with a number did not open a rule "
             "(default: list it as a notice and go on)"
         ),
     )
@@ -193,7 +193,12 @@ def _report(key: str, mode: str, result: SegmentResult, *, emitted: bool, as_jso
                 "checks": [_check_json(check) for check in result.checks],
                 "command": NAME,
                 "continuations": [
-                    {"line": found.line, "number": found.number, "span": found.span}
+                    {
+                        "kind": found.kind,
+                        "line": found.line,
+                        "number": found.number,
+                        "span": found.span,
+                    }
                     for found in result.continuations
                 ],
                 "format": output.FORMAT_VERSION,

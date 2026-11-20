@@ -6,16 +6,35 @@ name starts with an underscore. Nothing here is for any other use, and it may ch
 notice.
 """
 
-from sabot_cli.vault._process import process_start
+from sabot_cli.vault._key import (
+    KEY_FILE,
+    STATE_DIRECTORY_VARIABLE,
+    canonical_journal_bytes,
+    default_state_directory,
+    sign,
+    signing_key,
+    state_directory,
+)
+from sabot_cli.vault._process import boot_identity, plausible_pid, process_start, same_boot
 from sabot_cli.vault._walk import set_listing as set_directory_listing
 from sabot_cli.vault._yaml import C_SAFE_STRING_LOADER, PureSafeStringLoader
 from sabot_cli.vault.transaction import HardStop, checkpoint_hook
 
 __all__ = [
     "C_SAFE_STRING_LOADER",
+    "KEY_FILE",
+    "STATE_DIRECTORY_VARIABLE",
     "HardStop",
     "PureSafeStringLoader",
+    "boot_identity",
+    "canonical_journal_bytes",
     "checkpoint_hook",
+    "default_state_directory",
+    "plausible_pid",
     "process_start",
+    "same_boot",
     "set_directory_listing",
+    "sign",
+    "signing_key",
+    "state_directory",
 ]

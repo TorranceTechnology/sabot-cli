@@ -82,9 +82,10 @@ def segment(
     feeds): text without them is one page, which a skip would discard whole. `boundaries` is the
     text of a boundaries file and is required, and only used, in `boundaries` mode. A refused
     input raises `SourceError`; a result whose checks fail is returned with its findings.
-    `numbered` and `headings` modes read a numbered line as a continuation of the rule before it
-    in some cases; each is listed in `continuations` and raised as the `numbered-continuations`
-    check, a notice unless `strict_numbering` makes it a failure.
+    `numbered` and `headings` modes list every line that begins with a number and did not open a
+    rule (a wrapped decimal, a number in a form no rule is read in, a page-number or contents
+    line that was dropped) in `continuations` and raise the `numbered-continuations` check, a
+    notice unless `strict_numbering` makes it a failure.
     """
     check_key(source_key)
     if skip_pages < 0:
@@ -125,15 +126,23 @@ def segment(
 
 
 def _continuation_check(continuations: Sequence[Continuation], *, strict: bool) -> CheckResult:
-    """Every numbered line read as part of the rule before it, for a person to look at."""
+    """Every numbered line that did not open a rule, for a person to look at."""
     return CheckResult(
         NUMBERED_CONTINUATIONS,
-        tuple(
-            f"line {found.line}: {found.number} read as text of {found.span}"
-            for found in continuations
-        ),
+        tuple(_describe(found) for found in continuations),
         advisory=not strict,
     )
+
+
+def _describe(found: Continuation) -> str:
+    where = f"line {found.line}: {found.number}"
+    if found.kind == "furniture":
+        return f"{where} dropped as page furniture, so it is in no span"
+    if found.kind == "unopened":
+        if found.span is None:
+            return f"{where} did not open a rule and is in no span"
+        return f"{where} did not open a rule; read as text of {found.span}"
+    return f"{where} read as text of {found.span}"
 
 
 def _build_items(

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from conftest import FIXTURES, CliRunner, copy_vault
-from sabot_cli.testing import checkpoint_hook, process_start
+from sabot_cli.testing import boot_identity, checkpoint_hook, process_start, same_boot
 from sabot_cli.vault import transaction as transaction_module
 from sabot_cli.vault.transaction import LOCK_FILE, lock_state
 from source_vaults import error_code, ingest_arguments
@@ -131,7 +131,27 @@ def test_a_lock_without_a_start_time_is_judged_by_its_process_alone(tmp_path: Pa
     assert (live, lock_state(vault)) == ("live", "stale")
 
 
-@pytest.mark.parametrize("pid", [10**30, 2**40, 0, -3, True, "12", 1.5, None, [1]])
+@pytest.mark.parametrize(
+    "pid",
+    [
+        10**30,
+        2**40,
+        0,
+        -3,
+        True,
+        "12",
+        1.5,
+        None,
+        [1],
+        pytest.param(
+            2**31,
+            marks=pytest.mark.skipif(
+                sys.platform == "win32", reason="a process id is unsigned 32-bit on Windows"
+            ),
+            id="one past the largest POSIX process id",
+        ),
+    ],
+)
 def test_a_lock_naming_an_impossible_process_id_cannot_be_judged_and_never_crashes(
     pid: object, run_cli: CliRunner, tmp_path: Path
 ) -> None:
@@ -181,7 +201,140 @@ def test_a_running_write_records_its_process_id_host_and_start_time(
     with checkpoint_hook(read_lock):
         run_cli(*ingest_arguments(RULES_E2, "dwx"), "--vault", str(vault))
 
-    # Then the lock names this process and, where the platform gives it, its start time
+    # Then the lock names this process and, where the platform gives it, its start time and boot
     assert seen[0]["pid"] == os.getpid()
     assert seen[0]["host"] == socket.gethostname()
     assert seen[0]["start"] == process_start(os.getpid())
+    recorded, current = seen[0]["boot"], boot_identity()
+    assert (recorded is None) == (current is None)
+    if current is not None:
+        assert isinstance(recorded, str)
+        assert same_boot(recorded, current)
+
+
+requires_boot_identity = pytest.mark.skipif(
+    boot_identity() is None, reason="this platform gives no boot identity"
+)
+
+
+def _another_boot() -> str:
+    current = boot_identity()
+    assert current is not None
+    kind = current.partition(":")[0]
+    return f"{kind}:1" if kind in ("darwin", "win32") else f"{kind}:another-boot"
+
+
+@requires_boot_identity
+def test_the_boot_identity_is_the_same_each_time_it_is_read() -> None:
+    # Given this boot of this machine
+    # When its identity is read twice
+    first, second = boot_identity(), boot_identity()
+
+    # Then the two readings name one boot
+    assert first is not None
+    assert second is not None
+    assert same_boot(first, second)
+
+
+@pytest.mark.parametrize(
+    ("recorded", "current", "same"),
+    [
+        ("linux:abc", "linux:abc", True),
+        ("linux:abc", "linux:abd", False),
+        ("darwin:1000", "darwin:1000", True),
+        ("darwin:1000", "darwin:1005", True),
+        ("darwin:1000", "darwin:1060", False),
+        ("win32:1000", "win32:995", True),
+        ("win32:1000", "win32:2000", False),
+        ("darwin:1000", "win32:1000", False),
+        ("darwin:soon", "darwin:later", False),
+        ("darwin:same", "darwin:same", True),
+    ],
+)
+def test_two_boot_identities_name_one_boot_within_the_clock_tolerance(
+    recorded: str, current: str, same: bool
+) -> None:
+    # Given two boot identities, whose clock-derived times may differ a little within one boot
+    # When they are compared
+    # Then they are one boot only inside the tolerance and of one kind
+    assert same_boot(recorded, current) is same
+
+
+@requires_boot_identity
+def test_a_lock_written_in_another_boot_is_stale_though_its_process_id_is_live(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a lock naming a process id that is running now (this process), recorded in another
+    # boot of this machine
+    vault = copy_vault(tmp_path / "vault")
+    write_lock(vault, pid=os.getpid(), boot=_another_boot())
+
+    # When the lock is judged, a reader runs and recover runs without --force
+    # Then it is stale: readers go on and recover clears it
+    assert lock_state(vault) == "stale"
+    assert run_cli("lint", "--vault", str(vault), "--json").returncode == 0
+    cleared = run_cli("recover", "--vault", str(vault), "--json")
+    assert cleared.returncode == 0
+    assert cleared.json()["clearedLock"] is True
+
+
+@requires_boot_identity
+@pytest.mark.skipif(sys.platform == "win32", reason="process id 1 is a POSIX init process")
+def test_a_lock_naming_a_system_process_from_before_a_reboot_is_stale(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a lock whose id now belongs to a system process that this user cannot inspect (the
+    # usual state after a reboot), recorded in another boot
+    vault = copy_vault(tmp_path / "vault")
+    write_lock(vault, pid=1, start="darwin:1:1", boot=_another_boot())
+
+    # When a reader runs
+    # Then it is not told a write is in progress
+    assert lock_state(vault) == "stale"
+    assert run_cli("lint", "--vault", str(vault), "--json").returncode == 0
+
+
+@requires_boot_identity
+def test_a_lock_written_in_this_boot_stays_live(tmp_path: Path) -> None:
+    # Given a lock of this process recorded in this boot
+    vault = copy_vault(tmp_path / "vault")
+    write_lock(vault, pid=os.getpid(), boot=boot_identity())
+
+    # When it is judged
+    # Then the writer is live
+    assert lock_state(vault) == "live"
+
+
+@pytest.mark.parametrize("boot", [5, ["x"], True])
+def test_a_lock_with_a_boot_that_is_not_text_cannot_be_judged(tmp_path: Path, boot: object) -> None:
+    # Given a lock whose boot field is not a string
+    vault = copy_vault(tmp_path / "vault")
+    write_lock(vault, pid=os.getpid(), boot=boot)
+
+    # When it is judged
+    # Then it cannot be told, and nothing raises
+    assert lock_state(vault) == "other"
+
+
+def test_a_lock_without_a_boot_is_judged_by_its_process_alone(tmp_path: Path) -> None:
+    # Given a lock of the earlier form, with no boot, naming this process
+    vault = copy_vault(tmp_path / "vault")
+    write_lock(vault, pid=os.getpid())
+
+    # When it is judged
+    # Then the writer is live
+    assert lock_state(vault) == "live"
+
+
+def test_a_boot_that_cannot_be_read_is_not_held_against_a_lock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given a lock of a live process recorded in some boot, on a system where this boot's
+    # identity cannot be read (a sandbox that forbids the call, for one)
+    vault = copy_vault(tmp_path / "vault")
+    write_lock(vault, pid=os.getpid(), boot="linux:some-other-boot")
+    monkeypatch.setattr(transaction_module, "boot_identity", lambda: None)
+
+    # When the lock is judged
+    # Then it is live: a lock is not cleared on a guess
+    assert lock_state(vault) == "live"

@@ -461,21 +461,21 @@ def test_every_mode_reports_the_numbered_continuations_check(
             "3. Setup\n3.1 shuffle the deck\n3.3 deal five cards to each player.\n4. Play\n",
             "dotted",
             ["3", "3.1", "4"],
-            [{"line": 3, "number": "3.3", "span": "3.1"}],
+            [{"line": 3, "number": "3.3", "span": "3.1", "kind": "wrapped"}],
             id="a skipped number is read as a continuation",
         ),
         pytest.param(
             "4. Combat\n4.2 Blocking\n4.2a the attacker picks\n4.2c the defender may block.\n",
             "dotted-letter",
             ["4", "4.2", "4.2a"],
-            [{"line": 4, "number": "4.2c", "span": "4.2a"}],
+            [{"line": 4, "number": "4.2c", "span": "4.2a", "kind": "wrapped"}],
             id="a skipped letter is read as a continuation",
         ),
         pytest.param(
             "12. End\n12.4 the game ends when the last card is played.\n",
             "dotted",
             ["12"],
-            [{"line": 2, "number": "12.4", "span": "12"}],
+            [{"line": 2, "number": "12.4", "span": "12", "kind": "wrapped"}],
             id="a first child that is not .1 is read as a continuation",
         ),
         pytest.param(
@@ -565,6 +565,140 @@ def test_strict_numbering_passes_when_no_numbered_line_was_read_as_a_continuatio
     # Then it succeeds
     assert code == 0
     assert document["written"] is True
+
+
+@pytest.mark.parametrize(
+    ("text", "numbering", "spans", "continuations"),
+    [
+        pytest.param(
+            "4.1 Attack first.\n4.2\nThe defender then blocks.\n4.3 Damage follows.\n",
+            "dotted",
+            ["4.1", "4.3"],
+            [{"kind": "unopened", "line": 2, "number": "4.2", "span": "4.1"}],
+            id="a bare number on a line of its own",
+        ),
+        pytest.param(
+            "4.1 Attack first.\n4.2) Damage follows.\n4.3 Blocking ends it.\n",
+            "dotted",
+            ["4.1", "4.3"],
+            [{"kind": "unopened", "line": 2, "number": "4.2", "span": "4.1"}],
+            id="a number closed by a parenthesis",
+        ),
+        pytest.param(
+            "4.1 Attack first.\n5 Scoring happens.\n5.1 Points count.\n",
+            "dotted",
+            ["4.1", "5.1"],
+            [{"kind": "unopened", "line": 2, "number": "5", "span": "4.1"}],
+            id="a whole number with no dot",
+        ),
+        pytest.param(
+            "4.1 Attack first.\n4.1a Then block.\n4.2 Damage follows.\n",
+            "dotted",
+            ["4.1", "4.2"],
+            [{"kind": "unopened", "line": 2, "number": "4.1a", "span": "4.1"}],
+            id="a lettered number when letters are not read",
+        ),
+        pytest.param(
+            "4.1 Attack first.\n4.2 Count ten.......... 10\n4.3 Damage follows.\n",
+            "dotted",
+            ["4.1", "4.3"],
+            [{"kind": "furniture", "line": 2, "number": "4.2", "span": None}],
+            id="a rule dropped as page furniture",
+        ),
+        pytest.param(
+            "Preface text.\n7 Scoring happens.\n7.1 Points count.\n",
+            "dotted",
+            ["7.1"],
+            [{"kind": "unopened", "line": 2, "number": "7", "span": None}],
+            id="a numbered-looking line before the first rule",
+        ),
+    ],
+)
+def test_a_line_that_looks_numbered_and_opens_no_rule_is_never_lost_unreported(
+    text: str,
+    numbering: str,
+    spans: list[str],
+    continuations: list[dict[str, object]],
+    run_cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    # Given numbered text in which one line begins with a number but is not in the form a rule
+    # is read in, or is dropped as page furniture
+    source = write_text(tmp_path / "rules.txt", text)
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": source})
+
+    # When it is segmented
+    code, document = _segment(run_cli, vault, source, "numbered", "--numbering", numbering)
+
+    # Then the line is not a span, and it is listed with its line, number, span and kind
+    assert code == 0
+    assert _span_locators(vault) == spans
+    assert document["continuations"] == continuations
+
+
+def test_a_numbered_looking_line_under_a_heading_is_listed_and_counted_by_strict_numbering(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given headings text with a bare number on a line of its own, a number before the first
+    # heading and a contents line that begins with a number
+    source = write_text(
+        tmp_path / "rules.txt",
+        "9 Cover\n# Combat\n4.1 Attack first.\n4.2\nThe defender blocks.\n"
+        "4.3 Count ten.......... 10\n",
+    )
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": source})
+    before = vault_state(vault)
+
+    # When it is segmented with --strict-numbering
+    code, document = _segment(run_cli, vault, source, "headings", "--strict-numbering")
+
+    # Then all three are listed, the run fails and nothing is written
+    assert code == 1
+    assert document["continuations"] == [
+        {"kind": "unopened", "line": 1, "number": "9", "span": None},
+        {"kind": "unopened", "line": 4, "number": "4.2", "span": "combat/4.1"},
+        {"kind": "furniture", "line": 6, "number": "4.3", "span": None},
+    ]
+    assert vault_state(vault) == before
+
+
+def test_each_kind_of_unopened_line_has_its_own_wording_in_text_output(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given text with one line of each kind
+    source = write_text(
+        tmp_path / "rules.txt",
+        "7 Cover\n4.1 Attack first.\n4.2\n4.3 Count ten.......... 10\n4.4 Last.\n",
+    )
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": source})
+
+    # When it is segmented with text output
+    result = run_cli(
+        "segment", str(source), "--source", "dw1", "--mode", "numbered", "--vault", str(vault)
+    )
+
+    # Then each is described in its own words
+    assert result.returncode == 0
+    assert "  line 1: 7 did not open a rule and is in no span\n" in result.stdout
+    assert "  line 3: 4.2 did not open a rule; read as text of 4.1\n" in result.stdout
+    assert "  line 4: 4.3 dropped as page furniture, so it is in no span\n" in result.stdout
+
+
+def test_listed_lines_are_in_line_order_not_text_order(run_cli: CliRunner, tmp_path: Path) -> None:
+    # Given text with a rule and then eleven lines that begin with a number but open no rule
+    source = write_text(
+        tmp_path / "rules.txt", "1.1 A rule.\n" + "".join(f"9 Item {n}.\n" for n in range(11))
+    )
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": source})
+
+    # When it is segmented with text output
+    result = run_cli(
+        "segment", str(source), "--source", "dw1", "--mode", "numbered", "--vault", str(vault)
+    )
+
+    # Then the lines are listed 2, 3, ... 12, not 10, 11, 12, 2, 3 ...
+    listed = [line for line in result.stdout.splitlines() if line.startswith("  line ")]
+    assert [int(line.split(":")[0].split()[1]) for line in listed] == list(range(2, 13))
 
 
 def test_headings_mode_numbers_a_heading_that_repeats(run_cli: CliRunner, tmp_path: Path) -> None:

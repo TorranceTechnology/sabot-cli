@@ -1,21 +1,26 @@
-"""Whether a process exists and when it started, with only the standard library.
+"""Whether a process exists, when it started and when the machine did, in the standard library.
 
 A write lock names the process that holds it. A process id can be reused after a reboot or a
-crash, so the lock also records when its writer started: the same id with another start time is
-a different process. Every function here answers "cannot tell" (None, or True for existence)
-rather than raising, because a lock written by another tool, or by another version of this one,
-can hold any value.
+crash, so the lock also records when its writer started (the same id with another start time is
+a different process) and which boot of the machine it ran in (another boot is another set of
+processes, whatever their ids). Every function here answers "cannot tell" (None, or True for
+existence) rather than raising, because a lock written by another tool, or by another version of
+this one, can hold any value.
 """
 
 import ctypes
 import os
 import sys
+import time
 
-__all__ = ["plausible_pid", "process_is_alive", "process_start"]
+__all__ = ["boot_identity", "plausible_pid", "process_is_alive", "process_start", "same_boot"]
 
-# Process ids are 32-bit on every platform this tool runs on; a larger number was not written
-# by a process of this host.
-_PID_LIMIT = 2**32
+# A process id is a signed 32-bit number on POSIX systems and an unsigned one on Windows; a larger
+# number was not written by a process of this host.
+_PID_LIMIT = 2**32 if sys.platform == "win32" else 2**31
+# Boot times read from the clock can differ by this many seconds between two readings of one
+# boot, from a clock adjustment, so two of them within it are one boot.
+_BOOT_TOLERANCE_SECONDS = 10
 
 
 def plausible_pid(pid: int) -> bool:
@@ -33,7 +38,7 @@ def process_is_alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    except (OSError, OverflowError, ValueError):
+    except OSError:
         # The process exists but belongs to someone else, or the platform declines to say.
         return True
     return True
@@ -57,6 +62,77 @@ def process_start(pid: int) -> str | None:
     except (OSError, ValueError, OverflowError, AttributeError, ImportError, ctypes.ArgumentError):
         return None
     return None
+
+
+def boot_identity() -> str | None:
+    """A string that identifies this boot of the machine, or None when it cannot be read.
+
+    Compare two with `same_boot`: on macOS and Windows it is a boot time, which a clock
+    adjustment can move a little.
+    """
+    try:
+        if sys.platform.startswith("linux"):
+            return _linux_boot()
+        if sys.platform == "darwin":
+            return _macos_boot()
+        if sys.platform == "win32":
+            return _windows_boot()
+    except (OSError, ValueError, OverflowError, AttributeError, ImportError, ctypes.ArgumentError):
+        return None
+    return None
+
+
+def same_boot(recorded: str, current: str) -> bool:
+    """Whether two boot identities name one boot."""
+    kind, _, recorded_value = recorded.partition(":")
+    current_kind, _, current_value = current.partition(":")
+    if kind != current_kind:
+        return False
+    if kind in ("darwin", "win32"):
+        try:
+            return abs(int(recorded_value) - int(current_value)) <= _BOOT_TOLERANCE_SECONDS
+        except ValueError:
+            pass
+    return recorded_value == current_value
+
+
+def _linux_boot() -> str | None:
+    with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as handle:
+        boot = handle.read().strip()
+    return f"linux:{boot}" if boot else None
+
+
+class _TimeVal(ctypes.Structure):
+    _fields_ = [("sec", ctypes.c_int64), ("usec", ctypes.c_int32)]
+
+
+def _macos_boot() -> str | None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.sysctlbyname.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+    ]
+    libc.sysctlbyname.restype = ctypes.c_int
+    value = _TimeVal()
+    size = ctypes.c_size_t(ctypes.sizeof(value))
+    if libc.sysctlbyname(b"kern.boottime", ctypes.byref(value), ctypes.byref(size), None, 0) != 0:
+        return None
+    if size.value != ctypes.sizeof(value) or value.sec <= 0:
+        return None
+    return f"darwin:{value.sec}"
+
+
+def _windows_boot() -> str | None:
+    if sys.platform != "win32":
+        return None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetTickCount64.argtypes = []
+    kernel32.GetTickCount64.restype = ctypes.c_uint64
+    milliseconds = int(kernel32.GetTickCount64())
+    return f"win32:{int(time.time()) - milliseconds // 1000}"
 
 
 def _linux_start(pid: int) -> str | None:

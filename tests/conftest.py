@@ -1,6 +1,7 @@
 """Shared fixtures: an in-process CLI runner and copies of the Driftwood fixture vault."""
 
 import json
+import os
 import shutil
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -9,7 +10,11 @@ from pathlib import Path
 import pytest
 
 from sabot_cli.cli import main
-from sabot_cli.testing import set_directory_listing
+from sabot_cli.testing import (
+    STATE_DIRECTORY_VARIABLE,
+    default_state_directory,
+    set_directory_listing,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "driftwood"
 FIXTURE_VAULT = FIXTURES / "vault"
@@ -31,6 +36,35 @@ class CliResult:
 
 
 type CliRunner = Callable[..., CliResult]
+
+
+def snapshot_directory(directory: Path) -> object:
+    """What a directory holds, by name, size and modification time; its absence or why it
+    cannot be read is a value too, so two snapshots are equal only when nothing changed."""
+    try:
+        return sorted(
+            (str(path.relative_to(directory)), path.lstat().st_size, path.lstat().st_mtime_ns)
+            for path in [directory, *directory.rglob("*")]
+        )
+    except OSError as error:
+        return type(error).__name__
+
+
+@pytest.fixture(autouse=True)
+def isolated_state_directory(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+    """Point every test's journal key at a fresh directory, and fail one that wrote the real one.
+
+    The key lives in a per-user directory outside every vault, so without this a test run would
+    create it in the real home directory. The variable is set through a patch of its own, so a
+    test that calls `monkeypatch.undo()` does not undo it.
+    """
+    real = default_state_directory()
+    before = snapshot_directory(real)
+    state = tmp_path_factory.mktemp("state") / "sabot"
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(STATE_DIRECTORY_VARIABLE, os.fspath(state))
+        yield state
+    assert snapshot_directory(real) == before, f"a test wrote the real state directory {real}"
 
 
 @pytest.fixture

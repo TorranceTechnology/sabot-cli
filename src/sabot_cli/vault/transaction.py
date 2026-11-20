@@ -19,14 +19,17 @@ rolls forward.
 A transaction creates, replaces or deletes files; a deleted file is backed up like a replaced
 one and put back by a rollback. No transaction names a hidden path: the lock and the journal are
 managed here, and are not operations of it. A vault can arrive from elsewhere, so `recover`
-trusts a journal only as far as it can check it: see `_journal.py` for what a journal may name
-and the conditions under which an undo changes a file.
+applies only a journal whose MAC verifies under the per-user key (`_key.py`), whose vault path is
+this vault and whose backups hold the recorded bytes, and even then only as far as it can check
+it: see `_journal.py` for what a journal may name and the conditions under which an undo changes
+a file. `discard` removes journal directories and staged files without applying anything, and is
+safe on any vault.
 
 A lock file created with exclusive-create makes a second writer refuse with `vault-locked`. It
-records the writer's process id, start time and host name, so that a reader can tell a write in
-progress from one that was killed. Two things are out of scope: concurrent writers that bypass
-this module, and power loss on a file system that does not order a rename against the directory
-reaching disk.
+records the writer's process id, start time, boot identity and host name, so that a reader can
+tell a write in progress from one that was killed. Two things are out of scope: concurrent
+writers that bypass this module, and power loss on a file system that does not order a rename
+against the directory reaching disk.
 """
 
 import contextlib
@@ -45,6 +48,7 @@ from pathlib import Path, PurePosixPath
 from types import FrameType, TracebackType
 from typing import Literal, Self
 
+from sabot_cli.vault._errors import TransactionError
 from sabot_cli.vault._journal import (
     BACKUP_DIRECTORY,
     JOURNAL_FILE,
@@ -53,26 +57,36 @@ from sabot_cli.vault._journal import (
     Journal,
     Kind,
     Operation,
-    TransactionError,
     is_vault_path,
     journal_refusal,
+    parse_journal_document,
     plan_undo,
     run_undo,
     staged_name,
     sync_directory,
+    verify_backups,
     write_synced,
 )
-from sabot_cli.vault._process import plausible_pid, process_is_alive, process_start
+from sabot_cli.vault._key import mac_matches, read_key, signing_key
+from sabot_cli.vault._process import (
+    boot_identity,
+    plausible_pid,
+    process_is_alive,
+    process_start,
+    same_boot,
+)
 from sabot_cli.vault.text import TextFileError, read_text
 
 __all__ = [
     "JOURNAL_PREFIX",
     "LOCK_FILE",
     "WRITE_IN_PROGRESS",
+    "Discard",
     "Recovery",
     "Transaction",
     "TransactionError",
     "atomic_write",
+    "discard",
     "incomplete_work",
     "is_vault_path",
     "lock_state",
@@ -119,6 +133,15 @@ class Recovery:
     """What `recover` did, by name and relative path, sorted."""
 
     rolled_back: tuple[str, ...]
+    removed_staged: tuple[str, ...]
+    cleared_lock: bool
+
+
+@dataclass(frozen=True)
+class Discard:
+    """What `discard` removed, by name and relative path, sorted."""
+
+    removed_journals: tuple[str, ...]
     removed_staged: tuple[str, ...]
     cleared_lock: bool
 
@@ -199,11 +222,9 @@ def _has_record(journal_directory: Path) -> bool:
 def _staged_files(root: Path) -> tuple[str, ...]:
     found: list[str] = []
     for directory, subdirectories, files in os.walk(root):
-        subdirectories[:] = [
-            name
-            for name in subdirectories
-            if name != ".git" and not name.startswith(JOURNAL_PREFIX)
-        ]
+        # A hidden directory (`.git`, `.obsidian`, a journal) is never entered: this tool names
+        # none, and what is inside belongs to something else.
+        subdirectories[:] = [name for name in subdirectories if not name.startswith(".")]
         found += [
             (Path(directory) / name).relative_to(root).as_posix()
             for name in files
@@ -225,11 +246,12 @@ type LockState = Literal["none", "live", "stale", "other"]
 def lock_state(root: Path) -> LockState:
     """What the write lock of a vault says about whoever holds it.
 
-    `none`: no lock. `live`: the process that wrote it is running on this host. `stale`: that
-    process is gone, or its id now belongs to a process that started at another time. `other`:
-    it was written on another host, or cannot be read or understood, so whether its writer is
-    running cannot be told. When the lock records a start time and the running process's start
-    time cannot be read, the lock is `live`: a lock is never judged stale on a guess.
+    `none`: no lock. `live`: the process that wrote it is running on this host. `stale`: it was
+    written in another boot of this machine, or its process is gone, or its id now belongs to a
+    process that started at another time. `other`: it was written on another host, or cannot be
+    read or understood, so whether its writer is running cannot be told. When the lock records a
+    start time and the running process's start time cannot be read, the lock is `live` unless the
+    boot differs: a lock is never judged stale on a guess.
     """
     try:
         text = (root / LOCK_FILE).read_text(encoding="utf-8")
@@ -249,6 +271,13 @@ def lock_state(root: Path) -> LockState:
         return "other"
     if start is not None and not isinstance(start, str):
         return "other"
+    boot = document.get("boot")
+    if boot is not None and not isinstance(boot, str):
+        return "other"
+    if boot is not None:
+        current_boot = boot_identity()
+        if current_boot is not None and not same_boot(boot, current_boot):
+            return "stale"
     try:
         if not process_is_alive(pid):
             return "stale"
@@ -302,18 +331,19 @@ def _settle_committed(root: Path) -> None:
             _remove_tree(root / name)
 
 
-def recover(root: Path, *, force: bool = False) -> Recovery:
-    """Roll back every unfinished transaction of a vault and clear what it left.
+_DISCARD_HINT = "; to drop the journal without applying it, run sabot recover --discard"
+_HINTED_CODES = frozenset(
+    {"journal-invalid", "journal-unverified", "key-invalid", "state-directory-in-vault"}
+)
 
-    A journal is undone, never completed. Staged files without a journal are removed. A lock
-    held by a live process of this host is refused, as is one whose writer cannot be told
-    (another host's, or unreadable), unless `force`; a lock whose process is gone is cleared.
-    A journal written on another host is refused unless `force`. Every journal is read, checked
-    against the files it names, and planned before anything is changed: if one operation cannot
-    be verified, nothing is changed and the refusal says which.
-    """
+
+def _require_vault_directory(root: Path) -> None:
     if not root.is_dir():
         raise TransactionError("not-a-vault", f"the directory has no {_REGISTRATION_FILE}")
+
+
+def _refuse_unless_forced_over_lock(root: Path, *, force: bool) -> None:
+    """Refuse while a write may be running; `force` overrides this and nothing else."""
     state = lock_state(root)
     if state == "live" and not force:
         raise TransactionError(
@@ -325,7 +355,31 @@ def recover(root: Path, *, force: bool = False) -> Recovery:
             "the write lock was left by another host or cannot be read, so whether a write is "
             "running cannot be told; use --force once you know none is",
         )
-    journals = [(name, _read_journal(root, name, force=force)) for name in pending_journals(root)]
+
+
+def _clear_lock(root: Path) -> bool:
+    lock = root / LOCK_FILE
+    cleared = lock.is_file()
+    if lock.is_file() or lock.is_symlink():
+        lock.unlink()
+    return cleared
+
+
+def recover(root: Path, *, force: bool = False) -> Recovery:
+    """Roll back every unfinished transaction of a vault and clear what it left.
+
+    A journal is undone, never completed, and only when it is verified: its MAC is made with
+    this user's key, it names this vault and its backups hold the recorded bytes. A journal that
+    fails that is refused with `journal-unverified`, whatever `force` says. A verified journal is
+    then read, checked against the files it names, and planned before anything is changed: if
+    one operation cannot be verified, nothing is changed and the refusal says which. Staged files
+    without a journal are removed. A lock held by a live process of this host is refused, as is
+    one whose writer cannot be told (another host's, or unreadable), unless `force`; a lock whose
+    process is gone is cleared. `force` covers the lock only.
+    """
+    _require_vault_directory(root)
+    _refuse_unless_forced_over_lock(root, force=force)
+    journals = [(name, _read_journal(root, name)) for name in pending_journals(root)]
     _refuse_shared_files(journals)
     plans = [(name, plan_undo(root, root / name, journal)) for name, journal in journals]
     for name, plan in plans:
@@ -347,14 +401,53 @@ def recover(root: Path, *, force: bool = False) -> Recovery:
     removed = _staged_files(root)
     for relative in removed:
         (root / relative).unlink(missing_ok=True)
-    lock = root / LOCK_FILE
-    cleared = lock.is_file()
-    if lock.is_file() or lock.is_symlink():
-        lock.unlink()
-    return Recovery(tuple(rolled_back), removed, cleared)
+    return Recovery(tuple(rolled_back), removed, _clear_lock(root))
 
 
-def _read_journal(root: Path, name: str, *, force: bool) -> Journal:
+def discard(root: Path, *, force: bool = False) -> Discard:
+    """Remove every journal directory and staged file of a vault, and the lock if it is stale.
+
+    Nothing a journal names is read or changed, so this is safe on a vault whose journals are not
+    trusted. It removes entries named `.sabot-txn-*` at the vault root (a link of that name is
+    unlinked, never followed; a regular file of that name is left) and files named
+    `.sabot-new-*` below non-hidden directories, never following a link and never entering a
+    hidden directory. The lock rules are those of `recover`, and `force` covers them only.
+    """
+    _require_vault_directory(root)
+    _refuse_unless_forced_over_lock(root, force=force)
+    removed_journals: list[str] = []
+    for name in sorted(entry for entry in os.listdir(root) if entry.startswith(JOURNAL_PREFIX)):
+        path = root / name
+        if path.is_symlink():
+            path.unlink()
+        elif path.is_dir():
+            _remove_tree(path)
+            if path.exists():
+                raise TransactionError("recovery-failed", f"{name} could not be removed")
+        else:
+            continue
+        removed_journals.append(name)
+    removed = _staged_files(root)
+    for relative in removed:
+        (root / relative).unlink(missing_ok=True)
+    return Discard(tuple(removed_journals), removed, _clear_lock(root))
+
+
+def _read_journal(root: Path, name: str) -> Journal:
+    """Read a journal and verify it is one this user's sabot wrote for this vault.
+
+    The MAC is checked before the journal's operations are read for any purpose, and a journal
+    that does not verify is refused with `journal-unverified`.
+    """
+    try:
+        return _read_verified_journal(root, name)
+    except TransactionError as error:
+        if error.code in _HINTED_CODES:
+            raise TransactionError(error.code, error.message + _DISCARD_HINT) from error
+        raise
+
+
+def _read_verified_journal(root: Path, name: str) -> Journal:
     directory = root / name
     journal_file = directory / JOURNAL_FILE
     if directory.is_symlink() or journal_file.is_symlink():
@@ -365,14 +458,34 @@ def _read_journal(root: Path, name: str, *, force: bool) -> Journal:
         text = read_text(journal_file)
     except TextFileError as error:
         raise TransactionError("journal-invalid", f"{name} cannot be read") from error
-    journal = Journal.from_json(text, expected_token=name.removeprefix(JOURNAL_PREFIX))
-    if journal.host != _host_name() and not force:
+    document = parse_journal_document(text)
+    key = read_key(root)
+    if key is None:
         raise TransactionError(
-            "journal-other-host",
-            f"{name} was written on another host ({journal.host!r}); review what it names, "
-            "then use --force",
+            "journal-unverified",
+            f"{name} cannot be verified: this user has no journal key, so no journal here is "
+            "one this machine wrote",
         )
+    if not mac_matches(document, key):
+        raise TransactionError(
+            "journal-unverified",
+            f"{name} was not written by this user's sabot on this machine (its MAC does not "
+            "verify), so it is not applied",
+        )
+    journal = Journal.from_document(document, expected_token=name.removeprefix(JOURNAL_PREFIX))
+    if not _same_directory(journal.vault, root):
+        raise TransactionError(
+            "journal-unverified", f"{name} was written for another vault ({journal.vault!r})"
+        )
+    verify_backups(directory, journal)
     return journal
+
+
+def _same_directory(recorded: str, root: Path) -> bool:
+    try:
+        return os.path.samefile(recorded, root)
+    except (OSError, ValueError):
+        return False
 
 
 def _refuse_shared_files(journals: list[tuple[str, Journal]]) -> None:
@@ -537,8 +650,11 @@ class Transaction:
         if not (self._puts or self._deletes or self._directories):
             self._committed = True
             return
+        # Created on first need, before anything in the vault is touched; a refusal here leaves
+        # the vault as it was.
+        key = signing_key(self._root)
         try:
-            self._run()
+            self._run(key)
         except HardStop:
             raise
         except BaseException as error:
@@ -588,7 +704,7 @@ class Transaction:
                 wanted.add(name)
         return sorted(wanted, key=lambda name: (name.count("/"), name))
 
-    def _run(self) -> None:
+    def _run(self, key: bytes) -> None:
         root = self._root
         paths = self._ordered_paths()
         digests = {path: hashlib.sha256(self._puts.get(path, b"")).hexdigest() for path in paths}
@@ -615,11 +731,14 @@ class Transaction:
                     sha256=digests[path],
                     staged=staged_name(token, target).relative_to(root).as_posix(),
                     backup=f"{BACKUP_DIRECTORY}/{index}" if exists else None,
+                    backup_sha256=hashlib.sha256(target.read_bytes()).hexdigest()
+                    if exists
+                    else None,
                     mode=stat.S_IMODE(target.stat().st_mode) if exists else None,
                 )
             )
-        journal = Journal(token, _host_name(), tuple(operations), directories)
-        self._write_journal(journal, journal_directory)
+        journal = Journal(token, os.path.realpath(root), tuple(operations), directories)
+        self._write_journal(journal, journal_directory, key)
         # From here the vault can change, so any way out of this run that is not a finished
         # rollback has to say so.
         self._outcome = "incomplete"
@@ -653,7 +772,7 @@ class Transaction:
         if deferral.signum is not None:
             raise _stop_for(deferral.signum)
 
-    def _write_journal(self, journal: Journal, journal_directory: Path) -> None:
+    def _write_journal(self, journal: Journal, journal_directory: Path, key: bytes) -> None:
         journal_directory.mkdir()
         (journal_directory / BACKUP_DIRECTORY).mkdir()
         for operation in journal.operations:
@@ -661,8 +780,10 @@ class Transaction:
                 backup = journal_directory / operation.backup
                 shutil.copyfile(self._root / operation.path, backup)
                 shutil.copymode(self._root / operation.path, backup)
+                if hashlib.sha256(backup.read_bytes()).hexdigest() != operation.backup_sha256:
+                    raise OSError(errno.EIO, "a file changed while it was being backed up")
         temporary = journal_directory / f"{JOURNAL_FILE}.tmp"
-        write_synced(temporary, journal.to_json().encode("utf-8"))
+        write_synced(temporary, journal.to_json(key).encode("utf-8"))
         os.replace(temporary, journal_directory / JOURNAL_FILE)
         sync_directory(journal_directory)
         sync_directory(self._root)
@@ -676,7 +797,7 @@ class Transaction:
             # Failed before the journal was complete: no target had changed yet.
             _discard(journal_directory)
             return []
-        plan = plan_undo(self._root, journal_directory, self._journal)
+        plan = plan_undo(self._root, journal_directory, self._journal, trusted=True)
         problems = [*plan.problems, *run_undo(plan)]
         if not problems:
             _discard(journal_directory)
@@ -707,7 +828,12 @@ class Transaction:
         self._lock_held = True
         try:
             holder = json.dumps(
-                {"host": _host_name(), "pid": os.getpid(), "start": process_start(os.getpid())},
+                {
+                    "boot": boot_identity(),
+                    "host": _host_name(),
+                    "pid": os.getpid(),
+                    "start": process_start(os.getpid()),
+                },
                 sort_keys=True,
             )
             os.write(descriptor, holder.encode("utf-8") + b"\n")
