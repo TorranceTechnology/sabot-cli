@@ -8,6 +8,7 @@ from sabot_cli import output
 from sabot_cli.commands._options import Subparsers, add_json_option
 from sabot_cli.exit_codes import ExitCode
 from sabot_cli.rules.ruleset import RULESET_FILE
+from sabot_cli.vault.transaction import LOCK_FILE, Transaction, TransactionError
 
 NAME = "init"
 
@@ -68,7 +69,16 @@ def run(args: argparse.Namespace) -> int:
         return output.refuse(
             NAME, "directory-not-empty", "the directory is not empty", as_json=as_json
         )
-    created = _create(directory, ruleset_id)
+    try:
+        with Transaction(directory, create_root=True) as transaction:
+            if any(entry.name != LOCK_FILE for entry in directory.iterdir()):
+                return output.refuse(
+                    NAME, "directory-not-empty", "the directory is not empty", as_json=as_json
+                )
+            created = _plan(transaction, ruleset_id)
+            transaction.commit()
+    except TransactionError as error:
+        return output.refuse(NAME, error.code, error.message, as_json=as_json)
     if as_json:
         output.write_json(
             {
@@ -83,14 +93,14 @@ def run(args: argparse.Namespace) -> int:
     return int(ExitCode.OK)
 
 
-def _create(directory: Path, ruleset_id: str) -> tuple[str, ...]:
-    """Write the skeleton; return paths relative to `directory`, sorted, folders ending in `/`."""
+def _plan(transaction: Transaction, ruleset_id: str) -> tuple[str, ...]:
+    """Plan the skeleton; return paths relative to the vault, sorted, folders ending in `/`."""
     created: set[str] = {RULESET_FILE}
     for folder in _FOLDERS:
-        (directory / folder).mkdir(parents=True, exist_ok=True)
+        transaction.make_directory(folder)
         parts = folder.split("/")
         created.update("/".join(parts[: depth + 1]) + "/" for depth in range(len(parts)))
-    (directory / RULESET_FILE).write_bytes(_ruleset_text(ruleset_id).encode("utf-8"))
+    transaction.put(RULESET_FILE, _ruleset_text(ruleset_id).encode("utf-8"))
     return tuple(sorted(created))
 
 

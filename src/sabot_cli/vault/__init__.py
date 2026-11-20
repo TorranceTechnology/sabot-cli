@@ -1,4 +1,4 @@
-"""Read Markdown notes with YAML front matter into typed objects.
+"""Read Markdown notes with YAML front matter into typed objects, and write them in transactions.
 
 This package knows nothing about rules: it does not import `rules`, `sources`, `search` or
 `commands`, so it can be split out as a standalone vault reader.

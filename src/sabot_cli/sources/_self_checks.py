@@ -7,8 +7,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sabot_cli.sources._records import SpanRecord
+from sabot_cli.sources._spanref import locator_problem
 
-SELF_CHECKS: tuple[str, ...] = ("duplicate-locator", "no-spans", "non-monotone", "page-decreasing")
+SELF_CHECKS: tuple[str, ...] = (
+    "duplicate-locator",
+    "locator-invalid",
+    "no-spans",
+    "non-monotone",
+    "page-decreasing",
+)
 _NUMBER_KEY = re.compile(r"^(\d+(?:\.\d+)*)([a-z]?)$")
 
 
@@ -52,8 +59,10 @@ def run_self_checks(records: Sequence[SpanRecord]) -> tuple[CheckResult, ...]:
     pages = [
         later.locator for earlier, later in itertools.pairwise(spans) if later.page < earlier.page
     ]
+    uncitable = sorted({span.locator for span in spans if locator_problem(span.locator)})
     return (
         CheckResult("duplicate-locator", tuple(sorted(n for n, c in counts.items() if c > 1))),
+        CheckResult("locator-invalid", tuple(uncitable)),
         CheckResult("no-spans", () if spans else ("the segmentation produced no spans",)),
         CheckResult("non-monotone", tuple(sorted(set(descending)))),
         CheckResult("page-decreasing", tuple(sorted(set(pages)))),

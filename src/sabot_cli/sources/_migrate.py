@@ -118,13 +118,26 @@ def _judge(ref: SpanRef, diff: EditionDiff, old: SpanIndex, new: SpanIndex) -> _
         return _Judgement(kind, "", True)
     locator = root.locator if target is None else target
     suffix = "" if ref.sentence is None else f"/s{ref.sentence}"
-    if suffix and f"{diff.new_key}#{locator}{suffix}" not in new:
-        # The sentence the note cites is not there under the same number, so the wording moved.
+    if suffix and not _same_sentence(
+        old, f"{ref.span}{suffix}", new, f"{diff.new_key}#{locator}{suffix}"
+    ):
+        # An editorial edit to the span can move a sentence boundary, so the number alone does
+        # not say that the note still cites the same sentence.
         return _Judgement("substantive", "", kind == "moved")
     return _Judgement(
         "editorial" if kind == "editorial" else "clean",
         f"{diff.new_key}#{locator}{suffix}",
         kind == "moved",
+    )
+
+
+def _same_sentence(old: SpanIndex, old_span: str, new: SpanIndex, new_span: str) -> bool:
+    """Whether two sentence records exist and carry the same editorial hash."""
+    before, after = old.get(old_span), new.get(new_span)
+    return (
+        before is not None
+        and after is not None
+        and before.editorial_sha256 == after.editorial_sha256
     )
 
 
@@ -248,7 +261,23 @@ def _rewrite_citations(lines: list[str], closing: int, repoints: Mapping[str, st
         + ")(?![A-Za-z0-9.#/*-])"
     )
     for index in range(start, end):
-        lines[index] = pattern.sub(lambda match: repoints[match.group(1)], lines[index])
+        content, comment = _split_comment(lines[index])
+        lines[index] = pattern.sub(lambda match: repoints[match.group(1)], content) + comment
+
+
+def _split_comment(line: str) -> tuple[str, str]:
+    """A front matter line as (content, comment); a `#` starts a comment only outside quotes
+    and after whitespace, so the `#` of a reference is never one."""
+    quote = ""
+    for position, character in enumerate(line):
+        if quote:
+            if character == quote:
+                quote = ""
+        elif character in "\"'":
+            quote = character
+        elif character == "#" and (position == 0 or line[position - 1] in " \t"):
+            return line[:position], line[position:]
+    return line, ""
 
 
 def _set_stale(lines: list[str], closing: int, reason: str, carriage: str) -> int:

@@ -6,7 +6,12 @@ each reads `SpanIndex` and shares `_normalise`.
 
 from sabot_cli.sources._diff import EditionDiff, MovedSpan, PairedSpan, diff_editions
 from sabot_cli.sources._extract import DEFAULT_EXTRACTOR, EXTRACTORS, extract_text
-from sabot_cli.sources._files import check_key, read_edition_spans, read_text_file
+from sabot_cli.sources._files import (
+    check_key,
+    read_edition_ranges,
+    read_edition_spans,
+    read_text_file,
+)
 from sabot_cli.sources._migrate import (
     NoteMigration,
     StaleReason,
@@ -56,6 +61,7 @@ __all__ = [
     "overlap",
     "parse_span_ref",
     "plan_note_migration",
+    "read_edition_ranges",
     "read_edition_spans",
     "read_spans",
     "read_text_file",

@@ -88,11 +88,16 @@ def diff_editions(
     scope: Sequence[str] = (),
     old_text: str | None = None,
     new_text: str | None = None,
+    *,
+    old_ranges: Mapping[str, tuple[int, int]] | None = None,
+    new_ranges: Mapping[str, tuple[int, int]] | None = None,
 ) -> EditionDiff:
     """Classify every span of `old` and `new`; `scope` limits both to locators under a prefix.
 
-    Raises `SourceError` when exactly one text is given, or when a text does not hold the spans
-    its span file describes (checked by hashing what the span file's offsets point at).
+    `old_ranges` and `new_ranges` give the text each span owns when the edition has a boundaries
+    file; without them a span is read as running to the next span's start. Raises `SourceError`
+    when exactly one text is given, or when a text does not hold the spans its span file
+    describes (checked by hashing what the span file's offsets point at).
     """
     if (old_text is None) != (new_text is None):
         raise SourceError(
@@ -119,8 +124,8 @@ def diff_editions(
     paired: tuple[PairedSpan, ...] = ()
     changed: dict[str, int] = {}
     if old_text is not None and new_text is not None:
-        old_words = _span_words(old, old_text)
-        new_words = _span_words(new, new_text)
+        old_words = _span_words(old, old_text, old_ranges)
+        new_words = _span_words(new, new_text, new_ranges)
         changed = {
             locator: _word_delta(old_words[locator], new_words[locator]) for locator in substantive
         }
@@ -184,31 +189,45 @@ def _match_moves(
     removed: Sequence[str],
     added: Sequence[str],
 ) -> list[MovedSpan]:
-    """Match removed to added spans of equal hash, in document order, one to one."""
+    """Match removed to added spans of equal hash, in document order, one to one.
+
+    A span with no words is never matched: every empty text hashes alike, so two unrelated
+    parents that hold only their children would otherwise pair.
+    """
     waiting: dict[str, list[str]] = {}
     for locator in added:
-        waiting.setdefault(new_spans[locator].sha256, []).append(locator)
+        if new_spans[locator].words > 0:
+            waiting.setdefault(new_spans[locator].sha256, []).append(locator)
     moves: list[MovedSpan] = []
     for locator in removed:
+        if old_spans[locator].words == 0:
+            continue
         candidates = waiting.get(old_spans[locator].sha256)
         if candidates:
             moves.append(MovedSpan(locator, candidates.pop(0)))
     return moves
 
 
-def _span_words(index: SpanIndex, text: str) -> dict[str, list[str]]:
+def _span_words(
+    index: SpanIndex, text: str, ranges: Mapping[str, tuple[int, int]] | None
+) -> dict[str, list[str]]:
     """The normalised words of every span, read from `text` at the span file's offsets.
 
     A span runs from its offset to the next span record's, which is how the numbered, headings
-    and sentences modes cut it. A span that hashes differently from its record means the text
-    is not the edition the span file was made from.
+    and sentences modes cut it, unless `ranges` names the text the span owns, as a boundaries
+    file does when it skips text between two spans. A span that hashes differently from its
+    record means the text is not the edition the span file was made from.
     """
     lines = LineIndex(text)
     spans = [record for record in index.records if record.kind == "span"]
     words: dict[str, list[str]] = {}
     for position, record in enumerate(spans):
-        end = spans[position + 1].offset if position + 1 < len(spans) else len(text)
-        joined = lines.joined(record.offset, max(end, record.offset)).text
+        if ranges is not None and record.locator in ranges:
+            begin, end = ranges[record.locator]
+        else:
+            begin = record.offset
+            end = spans[position + 1].offset if position + 1 < len(spans) else len(text)
+        joined = lines.joined(begin, max(end, begin)).text
         normalised = normalise(joined)
         if digest(normalised) != record.sha256:
             # A heading's span ends where the next heading's title starts, after its `#` marks.

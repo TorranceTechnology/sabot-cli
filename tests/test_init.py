@@ -1,5 +1,6 @@
 """INI-1 and INI-2: `init` writes an empty valid vault, and refuses a directory in use."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -93,3 +94,39 @@ def test_init_refuses_a_malformed_ruleset_id(
     assert result.returncode == 3
     assert result.json()["error"]["code"] == "ruleset-id-invalid"  # type: ignore[index]
     assert not vault.exists()
+
+
+def test_init_below_a_file_is_a_refusal_not_a_traceback(run_cli: CliRunner, tmp_path: Path) -> None:
+    # Given a file where the vault's parent directory would have to be
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file\n", encoding="utf-8")
+
+    # When init is asked to create a vault below it
+    result = run_cli("init", str(blocker / "vault"), "--ruleset", "driftwood", "--json")
+
+    # Then it refuses with write-failed and the file is untouched
+    assert result.returncode == 3
+    assert result.json()["error"]["code"] == "write-failed"  # type: ignore[index]
+    assert blocker.read_text(encoding="utf-8") == "a file\n"
+
+
+def test_init_under_a_read_only_parent_is_a_refusal_not_a_traceback(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a parent directory that cannot be written
+    parent = tmp_path / "locked"
+    parent.mkdir()
+    parent.chmod(0o555)
+    try:
+        if os.access(parent, os.W_OK):
+            pytest.skip("this account can write read-only directories")
+
+        # When init creates a vault in it
+        result = run_cli("init", str(parent / "vault"), "--ruleset", "driftwood", "--json")
+    finally:
+        parent.chmod(0o755)
+
+    # Then it refuses with write-failed and creates nothing
+    assert result.returncode == 3
+    assert result.json()["error"]["code"] == "write-failed"  # type: ignore[index]
+    assert list(parent.iterdir()) == []

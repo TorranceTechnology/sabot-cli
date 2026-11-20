@@ -49,7 +49,7 @@ def _assert_reported_where_planted(
     elif defect == "frontmatter-invalid":
         # An unreadable note has no id to name; it is reported by its file.
         assert (notes, paths) == ({None}, {planted.path.as_posix()})  # type: ignore[comparison-overlap]
-    elif defect == "ruleset-invalid":
+    elif defect in ("ruleset-invalid", "transaction-incomplete"):
         assert (notes, paths) == ({None}, {planted.path.as_posix()})  # type: ignore[comparison-overlap]
     else:
         assert defect == "source-superseded"

@@ -16,6 +16,7 @@ from sabot_cli.sources import (
     check_key,
     diff_editions,
     plan_note_migration,
+    read_edition_ranges,
     read_edition_spans,
     read_text_file,
 )
@@ -65,7 +66,15 @@ def run(args: argparse.Namespace) -> int:
         new = read_edition_spans(vault, new_key)
         old_text = None if args.old_text is None else read_text_file(args.old_text)
         new_text = None if args.new_text is None else read_text_file(args.new_text)
-        diff = diff_editions(old, new, scope, old_text, new_text)
+        diff = diff_editions(
+            old,
+            new,
+            scope,
+            old_text,
+            new_text,
+            old_ranges=read_edition_ranges(vault, old_key),
+            new_ranges=read_edition_ranges(vault, new_key),
+        )
         affected = _affected_notes(vault, diff, old, new)
     except RulesetError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)

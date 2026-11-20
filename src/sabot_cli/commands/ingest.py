@@ -11,7 +11,8 @@ from sabot_cli.commands import _source_note
 from sabot_cli.commands._options import Subparsers, add_json_option, add_vault_option
 from sabot_cli.exit_codes import ExitCode
 from sabot_cli.output import JsonValue
-from sabot_cli.rules import RulesetError, load_ruleset, register_source
+from sabot_cli.rules import RulesetError, load_ruleset, ruleset_with_source
+from sabot_cli.rules.ruleset import RULESET_FILE
 from sabot_cli.sources import (
     DEFAULT_EXTRACTOR,
     EXTRACTORS,
@@ -21,6 +22,8 @@ from sabot_cli.sources import (
     SourceFormat,
     extract_text,
 )
+from sabot_cli.vault.paths import display_path, relative_within
+from sabot_cli.vault.transaction import Transaction, TransactionError, atomic_write
 
 NAME = "ingest"
 
@@ -81,9 +84,7 @@ def register(subparsers: Subparsers) -> None:
 
 
 def _is_inside(path: Path, directory: Path) -> bool:
-    resolved = path.resolve()
-    root = directory.resolve()
-    return resolved == root or root in resolved.parents
+    return relative_within(path, directory) is not None
 
 
 def _detect_format(path: Path, data: bytes) -> SourceFormat | None:
@@ -107,7 +108,7 @@ def run(args: argparse.Namespace) -> int:
     as_json = bool(args.json)
     vault: Path = args.vault
     key = str(args.key)
-    if not re.match(SOURCE_KEY_PATTERN, key):
+    if not re.fullmatch(SOURCE_KEY_PATTERN, key):
         return output.refuse(
             NAME,
             "source-key-invalid",
@@ -115,7 +116,7 @@ def run(args: argparse.Namespace) -> int:
             as_json=as_json,
         )
     try:
-        registered = {source.key for source in load_ruleset(vault).sources}
+        load_ruleset(vault)
     except RulesetError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
     try:
@@ -133,23 +134,51 @@ def run(args: argparse.Namespace) -> int:
             "unless --verify is given"
         )
         return int(ExitCode.USAGE)
-    refusal = _refusal(args, key, registered, data)
-    if refusal is not None:
-        return output.refuse(NAME, refusal[0], refusal[1], as_json=as_json)
-    fmt = args.format or _detect_format(args.file, data)
-    assert fmt is not None  # _refusal turns an undetectable format into a refusal
     try:
+        with Transaction(vault) as transaction:
+            return _register(args, key, data, transaction, as_json=as_json)
+    except TransactionError as error:
+        return output.refuse(NAME, error.code, error.message, as_json=as_json)
+
+
+def _register(
+    args: argparse.Namespace, key: str, data: bytes, transaction: Transaction, *, as_json: bool
+) -> int:
+    """Plan every output inside the write lock, then publish them together."""
+    vault: Path = args.vault
+    try:
+        registered = {source.key for source in load_ruleset(vault).sources}
+        refusal = _refusal(args, key, registered, data)
+        if refusal is not None:
+            return output.refuse(NAME, refusal[0], refusal[1], as_json=as_json)
+        fmt = args.format or _detect_format(args.file, data)
+        assert fmt is not None  # _refusal turns an undetectable format into a refusal
         extracted = extract_text(Path(args.file), fmt, args.extractor or DEFAULT_EXTRACTOR)
+        sha256 = hashlib.sha256(data).hexdigest()
+        stored = _store_name(args, key, fmt, sha256)
+        note = _source_note.render(_note_of(args, key, data, sha256, extracted))
+        registration = ruleset_with_source(vault, key, f"src.{key}", args.supersedes)
+    except RulesetError as error:
+        return output.refuse(NAME, error.code, error.message, as_json=as_json)
     except SourceError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
-    sha256 = hashlib.sha256(data).hexdigest()
-    stored = _store_name(args, key, fmt, sha256)
+    transaction.put(_source_note.note_relative(key), note.encode("utf-8"))
+    transaction.put(RULESET_FILE, registration)
+    outside = _OutsideFiles()
     try:
-        _write_all(args, key, stored, data, sha256, extracted)
+        if args.store is not None and stored is not None:
+            outside.write(args.store / stored, data)
+        if args.text_out is not None:
+            outside.write(args.text_out, extracted.text.encode("utf-8"))
+        transaction.commit()
     except OSError as error:
+        outside.undo()
         return output.refuse(
             NAME, "write-failed", f"a file could not be written: {error.strerror}", as_json=as_json
         )
+    except BaseException:
+        outside.undo()
+        raise
     _report(args, key, fmt, len(data), sha256, extracted, stored, as_json=as_json)
     return int(ExitCode.OK)
 
@@ -184,22 +213,10 @@ def _refusal(
     return None
 
 
-def _write_all(
-    args: argparse.Namespace,
-    key: str,
-    stored: str | None,
-    data: bytes,
-    sha256: str,
-    extracted: ExtractedText,
-) -> None:
-    vault: Path = args.vault
-    if args.store is not None and stored is not None:
-        args.store.mkdir(parents=True, exist_ok=True)
-        (args.store / stored).write_bytes(data)
-    if args.text_out is not None:
-        args.text_out.parent.mkdir(parents=True, exist_ok=True)
-        args.text_out.write_bytes(extracted.text.encode("utf-8"))
-    note = _source_note.SourceNote(
+def _note_of(
+    args: argparse.Namespace, key: str, data: bytes, sha256: str, extracted: ExtractedText
+) -> _source_note.SourceNote:
+    return _source_note.SourceNote(
         key=key,
         label=args.label,
         title=args.title,
@@ -215,10 +232,36 @@ def _write_all(
         supersedes=args.supersedes,
         amends=args.amends,
     )
-    path = _source_note.note_path(vault, key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(_source_note.render(note).encode("utf-8"))
-    register_source(vault, key, f"src.{key}", args.supersedes)
+
+
+class _OutsideFiles:
+    """Files written outside the vault, which a transaction cannot cover; undone on failure."""
+
+    def __init__(self) -> None:
+        self._previous: list[tuple[Path, bytes | None]] = []
+        self._made: list[Path] = []
+
+    def write(self, path: Path, data: bytes) -> None:
+        self._previous.append((path, path.read_bytes() if path.is_file() else None))
+        self._made += [
+            directory for directory in (path.parent, *path.parent.parents) if not directory.exists()
+        ]
+        atomic_write(path, data)
+
+    def undo(self) -> None:
+        for path, previous in reversed(self._previous):
+            try:
+                if previous is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    atomic_write(path, previous)
+            except OSError:
+                continue
+        for directory in self._made:
+            try:
+                directory.rmdir()
+            except OSError:
+                continue
 
 
 def _store_name(args: argparse.Namespace, key: str, fmt: SourceFormat, sha256: str) -> str | None:
@@ -240,7 +283,7 @@ def _report(
     as_json: bool,
 ) -> None:
     note = f"sources/src.{key}.md"
-    text_out = None if args.text_out is None else str(args.text_out)
+    text_out = None if args.text_out is None else display_path(args.text_out, args.vault)
     if as_json:
         document: dict[str, JsonValue] = {
             "bytes": size,

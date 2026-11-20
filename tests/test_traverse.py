@@ -281,3 +281,16 @@ def test_plain_text_output_is_a_table_with_paths(run_cli: CliRunner, driftwood_v
     assert result.returncode == 0
     assert lines[0].split() == ["distance", "id", "type", "title", "via"]
     assert lines[2].endswith("ph.ebb -precedes-> ph.sail ph.sail -precedes-> ph.flood")
+
+
+def test_an_edge_filter_accepts_the_authored_name_when_following_incoming_edges(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a phase that three notes link to with occurs-in, whose inverse is hosts
+    # When following incoming edges filtered by the authored name
+    result = _traverse(
+        run_cli, driftwood_vault, "ph.sail", "--direction", "in", "--edge", "occurs-in"
+    )
+
+    # Then the same notes are found as when filtering by the inverse name
+    assert result_ids(result) == ["act.launch-boat", "act.sail-out", "tp.boat-launched"]

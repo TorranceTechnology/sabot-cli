@@ -11,11 +11,20 @@ from sabot_cli.commands._options import Subparsers, add_json_option, add_vault_o
 from sabot_cli.exit_codes import ExitCode
 from sabot_cli.output import JsonValue
 from sabot_cli.rules import RulesetError, load_ruleset
-from sabot_cli.sources import SOURCE_KEY_PATTERN, CheckResult, SegmentResult, SourceError, segment
+from sabot_cli.sources import (
+    SOURCE_KEY_PATTERN,
+    CheckResult,
+    SegmentResult,
+    SourceError,
+    read_text_file,
+    segment,
+)
+from sabot_cli.vault.transaction import Transaction, TransactionError, atomic_write
 
 NAME = "segment"
 
 _KEY = re.compile(SOURCE_KEY_PATTERN)
+_BOM = b"\xef\xbb\xbf"
 
 
 def register(subparsers: Subparsers) -> None:
@@ -47,33 +56,33 @@ def register(subparsers: Subparsers) -> None:
     parser.add_argument(
         "--skip-pages",
         type=int,
-        default=1,
+        default=0,
         metavar="N",
-        help="leading pages to skip in numbered mode (default: 1, the title page)",
+        help=(
+            "leading pages to skip in numbered mode (default: 0). Pages are counted by form "
+            "feed; text without form feeds is one page and nothing is skipped"
+        ),
     )
     add_vault_option(parser)
     add_json_option(parser)
 
 
-def _read_text(path: Path) -> str:
-    try:
-        return path.read_bytes().decode("utf-8")
-    except OSError as error:
-        raise SourceError(
-            "file-unreadable", f"{path.name} cannot be read: {error.strerror}"
-        ) from error
-    except UnicodeDecodeError as error:
-        raise SourceError("text-undecodable", f"{path.name} is not valid UTF-8") from error
-
-
 def run(args: argparse.Namespace) -> int:
     """Execute the command and return its exit code."""
     as_json = bool(args.json)
+    try:
+        with Transaction(args.vault) as transaction:
+            return _segment(args, transaction, as_json=as_json)
+    except TransactionError as error:
+        return output.refuse(NAME, error.code, error.message, as_json=as_json)
+
+
+def _segment(args: argparse.Namespace, transaction: Transaction, *, as_json: bool) -> int:
     vault: Path = args.vault
     key, mode = str(args.source), str(args.mode)
     try:
         load_ruleset(vault)
-        if not _KEY.match(key):
+        if not _KEY.fullmatch(key):
             raise SourceError(
                 "source-key-invalid", "a source key is lowercase letters, digits, . and -"
             )
@@ -82,8 +91,8 @@ def run(args: argparse.Namespace) -> int:
             raise SourceError(
                 "source-not-ingested", f"the vault has no source note for {key!r}; run ingest first"
             )
-        text = _read_text(args.text_file)
-        boundaries = None if args.boundaries is None else _read_text(args.boundaries)
+        text = read_text_file(args.text_file)
+        boundaries = None if args.boundaries is None else read_text_file(args.boundaries)
         result = segment(
             text,
             key,
@@ -92,13 +101,20 @@ def run(args: argparse.Namespace) -> int:
             args.skip_pages,
             boundaries=boundaries,
         )
+        updated = _updated_note(note, mode) if result.ok else None
     except RulesetError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
     except SourceError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
-    emitted = _emit(args.emit_boundaries, result)
-    if result.ok:
-        _write_results(vault, note, key, mode, result)
+    try:
+        emitted = _emit(args.emit_boundaries, result)
+    except OSError as error:
+        return output.refuse(
+            NAME, "write-failed", f"a file could not be written: {error.strerror}", as_json=as_json
+        )
+    if updated is not None:
+        _plan_writes(transaction, key, mode, result, updated)
+        transaction.commit()
     _report(key, mode, result, emitted=emitted, as_json=as_json)
     return int(ExitCode.OK if result.ok else ExitCode.FINDINGS)
 
@@ -108,20 +124,29 @@ def _emit(target: Path | None, result: SegmentResult) -> bool:
     text = result.boundaries_text()
     if target is None or text is None:
         return False
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(text.encode("utf-8"))
+    atomic_write(target, text.encode("utf-8"))
     return True
 
 
-def _write_results(vault: Path, note: Path, key: str, mode: str, result: SegmentResult) -> None:
-    spans = vault / "spans"
-    spans.mkdir(parents=True, exist_ok=True)
-    (spans / f"{key}.jsonl").write_bytes(result.span_file_text().encode("utf-8"))
+def _updated_note(note: Path, mode: str) -> bytes:
+    """The source note with its `segmenter` set, decoded as the vault reader decodes a note."""
+    raw = note.read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise SourceError("source-note-invalid", "the source note is not valid UTF-8") from error
+    prefix = _BOM if raw.startswith(_BOM) else b""
+    return prefix + _source_note.with_segmenter(text, mode).encode("utf-8")
+
+
+def _plan_writes(
+    transaction: Transaction, key: str, mode: str, result: SegmentResult, note: bytes
+) -> None:
+    transaction.put(f"spans/{key}.jsonl", result.span_file_text().encode("utf-8"))
     boundaries = result.boundaries_text()
     if mode == "boundaries" and boundaries is not None:
-        (spans / f"{key}.boundaries.jsonl").write_bytes(boundaries.encode("utf-8"))
-    updated = _source_note.with_segmenter(note.read_bytes().decode("utf-8"), mode)
-    note.write_bytes(updated.encode("utf-8"))
+        transaction.put(f"spans/{key}.boundaries.jsonl", boundaries.encode("utf-8"))
+    transaction.put(_source_note.note_relative(key), note)
 
 
 def _check_json(check: CheckResult) -> dict[str, JsonValue]:

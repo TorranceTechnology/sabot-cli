@@ -39,6 +39,7 @@ The `sabot` console script is also installed in the environment, and `uv run pyt
 | `diff-editions` | Classify span changes between two editions. | Nothing. |
 | `migrate-edition` | Move citations to the successor edition. | The notes it changes, unless `--dry-run`. |
 | `overlap` | Detect copied source wording in note bodies. | Nothing. |
+| `recover` | Roll back a write that was killed. | Restores the vault; removes what the write left. |
 | `schema` | Show the schema a vault is written to. | Nothing. |
 | `search` | Find notes by property filters and full-text relevance. | Nothing. |
 | `traverse` | List notes reachable from one note over chosen edges. | Nothing. |
@@ -79,7 +80,7 @@ The example exits 0. Exit codes: 0 created; 3 refused (ruleset id not lowercase 
 
 ### ingest
 
-Registers one source edition: hashes the file, extracts its text, writes `sources/src.<key>.md` and adds the source to `_ruleset.yaml` (which it rewrites, so comments in that file are lost). The text is extracted to `--text-out` when given; the original goes to `--store` when given. Both must lie outside the vault, because the vault holds no source text. `--label`, `--title`, `--edition` and `--retrieved` are required unless `--verify` is given. `--kind` defaults to `edition`. The format is detected from the file unless `--format` is given. `--verify` compares the file with the hash the vault registered and writes nothing.
+Registers one source edition: hashes the file, extracts its text, writes `sources/src.<key>.md` and adds the source to `_ruleset.yaml` (as one new entry after the last source, so comments and layout elsewhere in the file are kept). The text is extracted to `--text-out` when given; the original goes to `--store` when given. Both must lie outside the vault, because the vault holds no source text. `--label`, `--title`, `--edition` and `--retrieved` are required unless `--verify` is given. `--kind` defaults to `edition`. The format is detected from the file unless `--format` is given. `--verify` compares the file with the hash the vault registered and writes nothing.
 
 ```text
 usage: sabot ingest [-h] --key KEY [--label LABEL] [--title TITLE]
@@ -106,11 +107,11 @@ extractor: text
 note: sources/src.dw1.md
 ```
 
-The example exits 0. Exit codes: 0 registered, or `--verify` and the hash matches; 1 only for `--verify` with a different hash; 2 a required option is missing; 3 refused (invalid or registered key, unreadable file, unknown format or extractor, a date that is not real, `--supersedes` or `--amends` naming an unregistered key, `--store` or `--text-out` inside the vault, extraction failed). JSON document keys: `bytes`, `command`, `extractor`, `format`, `key`, `note`, `sha256`, `sourceFormat`, `store`, `textOut`; with `--verify` they are `actualSha256`, `command`, `expectedSha256`, `format`, `key`, `match`.
+The example exits 0. Exit codes: 0 registered, or `--verify` and the hash matches; 1 only for `--verify` with a different hash; 2 a required option is missing; 3 refused (invalid or registered key, unreadable file, unknown format or extractor, a date that is not real, `--supersedes` or `--amends` naming an unregistered key, `--store` or `--text-out` inside the vault, extraction failed, a `sources` entry in `_ruleset.yaml` written in a form that cannot be extended in place). `textOut` and the `text-out` row name the file without its directory. JSON document keys: `bytes`, `command`, `extractor`, `format`, `key`, `note`, `sha256`, `sourceFormat`, `store`, `textOut`; with `--verify` they are `actualSha256`, `command`, `expectedSha256`, `format`, `key`, `match`.
 
 ### segment
 
-Splits extracted text into spans and writes `spans/<key>.jsonl`, which holds each span's locator, parent, page, offset and hashes and none of its text. It writes nothing when one of its own checks fails. Modes: `numbered` (rule numbers; `--numbering` defaults to `dotted`, and `dotted-letter` also reads `4.2a`), `headings`, `sentences` and `boundaries` (spans proposed in a boundaries file, which the tool checks and hashes). `--skip-pages` defaults to 1, the title page, and applies to `numbered` only.
+Splits extracted text into spans and writes `spans/<key>.jsonl`, which holds each span's locator, parent, page, offset and hashes and none of its text. It writes nothing when one of its own checks fails. Modes: `numbered` (rule numbers; `--numbering` defaults to `dotted`, and `dotted-letter` also reads `4.2a`), `headings`, `sentences` and `boundaries` (spans proposed in a boundaries file, which the tool checks and hashes). `--skip-pages` defaults to 0 and applies to `numbered` only; pages are counted by form feed, so text without form feeds is one page and nothing is skipped from it. A heading whose slug cannot be cited (such as `s2`, or one with no ASCII letters) fails the `locator-invalid` check.
 
 ```text
 usage: sabot segment [-h] --source KEY
@@ -130,6 +131,7 @@ uv run sabot segment tests/fixtures/driftwood/rules-e1.txt --source dw1 \
 spans: 51
 sentences: 39
 check duplicate-locator: passed
+check locator-invalid: passed
 check no-spans: passed
 check non-monotone: passed
 check page-decreasing: passed
@@ -157,7 +159,7 @@ The example exits 0. Exit codes: 0 no errors; 1 at least one error; 3 the direct
 
 ### compile
 
-Writes the machine graph: every note with its attributes and paraphrase, every authored edge, every inverse edge (marked derived), the ruleset's extensions and a digest of the notes, `_ruleset.yaml` and the span files. It refuses to run on a vault that has lint errors. The default path is `_index/graph.json` in the vault. `--check` writes nothing and tells whether the file at that path is current.
+Writes the machine graph: every note with its attributes and paraphrase, every authored edge, every inverse edge (marked derived), the ruleset's extensions and a digest of the notes, `_ruleset.yaml` and the span files. It refuses to run on a vault that has lint errors. The default path is `_index/graph.json` in the vault. `--check` writes nothing and tells whether the file at that path is current. `--out` may not name a directory or a note of the vault (`out-is-a-directory`, `out-is-a-note`).
 
 ```text
 usage: sabot compile [-h] [--out PATH] [--check] [--vault PATH] [--json]
@@ -251,11 +253,11 @@ notes that would change: 49
 ...
 ```
 
-The example exits 0. Exit codes: 0 migrated, or planned with `--dry-run`; 3 refused (invalid or equal keys, a missing span file, a note that cannot be rewritten line by line). JSON document keys: `added`, `changed`, `command`, `counts`, `dryRun`, `format`, `new`, `old`, `outcomes`, `unresolved`, `written`.
+The example exits 0. Exit codes: 0 migrated, or planned with `--dry-run`; 3 refused (invalid or equal keys, a missing span file, a note that cannot be rewritten line by line). A note whose front matter does not parse is not migrated and is listed under `unparsed` (JSON) or "notes not read" (text). JSON document keys: `added`, `changed`, `command`, `counts`, `dryRun`, `format`, `new`, `old`, `outcomes`, `unparsed`, `unresolved`, `written`.
 
 ### overlap
 
-Measures the longest run of consecutive words each note body shares with the extracted source text, and reports its length and offsets in the body, never the words. A run of `--warn-at` words (default 8) warns and a run of `--fail-at` words (default 10) fails. With no `paths`, every note is checked; a path is read as given and then under the vault. The source text must lie outside the vault.
+Measures the longest run of consecutive words each note body shares with the extracted source text, and reports its length and offsets in the body, never the words. A run of `--warn-at` words (default 8, or `--fail-at` when that is lower) warns and a run of `--fail-at` words (default 10) fails. With no `paths`, every note is checked; a path is read as given and then under the vault. The source text must lie outside the vault.
 
 ```text
 usage: sabot overlap [-h] --source-text PATH [--fail-at WORDS]
@@ -277,6 +279,24 @@ warned: 0
 ```
 
 The example exits 0. Exit codes: 0 no run reaches `--fail-at`; 1 at least one does; 3 refused (source text inside the vault, a path outside the vault or not a note, unreadable text). JSON document keys: `command`, `failAt`, `failed`, `format`, `notes`, `unreadable`, `warnAt`, `warned`.
+
+### recover
+
+Rolls back a write that was killed part-way, and clears what it left: the journal directory (`.sabot-txn-*`), staged files (`.sabot-new-*`) and the write lock (`.sabot-lock`). It restores the vault to its state before that write and never completes it. Run it only when no other `sabot` process is writing the vault. See [Writes into a vault](#writes-into-a-vault).
+
+```text
+usage: sabot recover [-h] [--vault PATH] [--json]
+```
+
+```sh
+uv run sabot recover --vault "$DEMO/vault"
+```
+
+```text
+nothing to recover
+```
+
+The example exits 0. Exit codes: 0 recovered, or nothing to recover; 3 refused (not a vault, a journal that cannot be read, a rollback that could not be completed). JSON document keys: `clearedLock`, `command`, `format`, `removedStaged`, `rolledBack`.
 
 ### schema
 
@@ -339,7 +359,7 @@ What full-text search indexes. Each note has two fields: its `title` property an
 
 ### traverse
 
-Lists the notes reachable from one note over edges, each once at its shortest distance, with the path that reached it. `--edge` may be repeated to follow only the named edges (inverse names are allowed). `--direction` defaults to `out`; `in` follows edges backwards under their inverse names, and `both` follows both. `--depth` defaults to 1 and ranges from 1 to 10. Rows are sorted by distance, then the last edge's name, then id. The start note is not listed, and a link to an id no note has is listed with no type or title.
+Lists the notes reachable from one note over edges, each once at its shortest distance, with the path that reached it. `--edge` may be repeated to follow only the named edges; an edge may be named by its authored name or its inverse in either direction. `--direction` defaults to `out`; `in` follows edges backwards under their inverse names, and `both` follows both. `--depth` defaults to 1 and ranges from 1 to 10. Rows are sorted by distance, then the last edge's name, then id. The start note is not listed, and a link to an id no note has is listed with no type or title.
 
 ```text
 usage: sabot traverse [-h] [--edge E] [--direction {out,in,both}] [--depth N]
@@ -362,7 +382,7 @@ The example exits 0. Exit codes: 0 traversed; 3 refused (unknown note id, unknow
 
 ## Conventions shared by every command
 
-**The vault argument.** Every command except `init` works on a vault named by `--vault PATH`, which defaults to the current directory. For `schema` the default is no vault, and the fixed schema is shown. `init` takes the directory to create instead. A directory without a `_ruleset.yaml` is not a vault and is refused with the code `not-a-vault`.
+**The vault argument.** Every command except `init` works on a vault named by `--vault PATH`, which defaults to the current directory. For `schema` the default is no vault, and the fixed schema is shown. `init` takes the directory to create instead. A directory without a `_ruleset.yaml` is not a vault and is refused with the code `not-a-vault`. `recover` takes `--vault` as well.
 
 **`--json`.** Every command accepts `--json`, which makes standard output one JSON document with sorted keys, two-space indentation and a trailing line feed. Every document has `command` and `format` (the version of the output format, currently 1). Standard error carries human diagnostics only and no contract; in `--json` mode it is empty unless a note was skipped or a command has something to say about its input.
 
@@ -377,6 +397,10 @@ The example exits 0. Exit codes: 0 traversed; 3 refused (unknown note id, unknow
 
 `--help` exits 0.
 
+**Writes into a vault.** `init`, `ingest`, `segment`, `migrate-edition` and `compile` (when its output lies in the vault) write through one transaction: every output is computed and checked in memory, staged as a hidden file beside its target, and then renamed into place with `_ruleset.yaml` last. A failure, an interrupt or a termination signal that Python can catch undoes the write, so the vault's bytes are what they were before; the command exits 3 with `write-failed` or `interrupted`. A file written outside the vault (`--store`, `--text-out`, `--emit-boundaries`, `compile --out` elsewhere) is staged and renamed too, and `ingest` removes what it wrote there when the vault write fails.
+
+A process killed outright leaves a journal behind. Every command except `lint` and `recover` then refuses with `transaction-incomplete` until `sabot recover` rolls the write back; `lint` reports it as the `transaction-incomplete` class. A lock file, `.sabot-lock`, makes a second writer refuse with `vault-locked`; `recover` clears a stale one. Out of scope: two processes writing one vault through anything but these commands, and power loss on a file system that does not order a rename against the directory reaching disk.
+
 **Determinism.** The same input gives the same standard output byte for byte, on every run and operating system, whatever order the files were created in. Text is UTF-8 with line feeds. JSON keys are sorted, lists are sorted by a documented key, ranking scores are rounded to four decimal places, and hashes are fixed-length. Paths of vault files are written relative to the vault. No command reads a clock, uses randomness or the network, or runs a model. Tests hold these guarantees for every command.
 
 **How an agent should call the tools.**
@@ -385,7 +409,7 @@ The example exits 0. Exit codes: 0 traversed; 3 refused (unknown note id, unknow
 - Read the exit code first. On 0 or 1 standard output is the command's document; on 3 it is the error document; on 2 there is none and standard error says why.
 - Treat 1 as a result, not a crash: for `lint` and `coverage` the document lists what to fix.
 - Run `lint --strict` before `compile`, and `coverage` before treating a source as fully cited. Run `migrate-edition --dry-run` before `migrate-edition`.
-- The commands that write are `init`, `ingest`, `segment`, `compile` and `migrate-edition`; the others only read. Give `--store`, `--text-out`, `--source-text` and `--emit-boundaries` paths outside the vault when the file holds source text.
+- The commands that write are `init`, `ingest`, `segment`, `compile` and `migrate-edition`; the others only read, except `recover`, which undoes an unfinished write. Give `--store`, `--text-out`, `--source-text` and `--emit-boundaries` paths outside the vault when the file holds source text.
 - Do not edit span files by hand, and do not copy source wording into a note body; `overlap` and the `quotation-long` lint class catch both.
 
 ## Development
@@ -408,7 +432,7 @@ src/sabot_cli/
   output.py         the only writer of stdout: canonical JSON, tables, the error object
   exit_codes.py     the exit codes
   commands/         one module per command, and the options and helpers they share
-  vault/            reads notes: front matter and wikilinks; knows no rules
+  vault/            reads notes (front matter, wikilinks) and writes them in transactions; knows no rules
   rules/            schema v1 (schema_v1.yaml), the ruleset file, lint checks, coverage, the compiled graph
   sources/          text extraction, segmentation, span files, boundaries, edition diff, migration, overlap
   search/           property filters, full-text ranking, traversal; imports only vault

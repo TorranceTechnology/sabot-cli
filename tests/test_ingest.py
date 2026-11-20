@@ -16,6 +16,7 @@ from source_vaults import (
     snapshot,
     vault_with_sources,
 )
+from support.filesystem import require_case_insensitive
 from support.minimal_pdf import write_pdf
 
 RULES_E1 = FIXTURES / "rules-e1.txt"
@@ -341,4 +342,47 @@ def test_ingest_without_registration_fields_is_a_usage_error(
     # Then it is a usage error that names the missing options, and nothing is written
     assert result.returncode == 2
     assert "--label" in result.stderr
+    assert snapshot(vault) == before
+
+
+def test_text_out_is_reported_by_file_name_without_a_directory(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given an empty vault and a text output path deep under a temporary directory
+    vault = vault_with_sources(run_cli, tmp_path / "vault")
+    text_out = tmp_path / "private" / "extracted" / "rules.txt"
+
+    # When the file is ingested with --text-out, in both output formats
+    as_json = run_cli(
+        *ingest_arguments(RULES_E1, "dw1"), "--text-out", str(text_out), "--vault", str(vault),
+        "--json",
+    )  # fmt: skip
+    as_text = run_cli(
+        *ingest_arguments(RULES_E2, "dw2"), "--text-out", str(text_out), "--vault", str(vault)
+    )
+
+    # Then neither output carries the directory, only the file's name
+    assert as_json.json()["textOut"] == "rules.txt"
+    assert "text-out: rules.txt\n" in as_text.stdout
+    assert str(tmp_path) not in as_json.stdout + as_text.stdout
+
+
+def test_ingest_refuses_a_text_output_spelled_in_another_letter_case(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a file system that ignores letter case and an empty vault
+    require_case_insensitive(tmp_path)
+    vault = vault_with_sources(run_cli, tmp_path / "vault")
+    before = snapshot(vault)
+    leak = tmp_path / "VAULT" / "leak.txt"
+
+    # When the text output names the vault in capitals
+    result = run_cli(
+        *ingest_arguments(RULES_E1, "dw1"), "--text-out", str(leak), "--vault", str(vault),
+        "--json",
+    )  # fmt: skip
+
+    # Then it is refused as inside the vault and nothing is written
+    assert result.returncode == 3
+    assert error_code(result) == "text-out-inside-vault"
     assert snapshot(vault) == before

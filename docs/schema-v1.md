@@ -488,7 +488,7 @@ Example record:
 {"editorialSha256":"1ac97d522c5a419d","kind":"span","locator":"1.3","offset":980,"page":3,"parent":"1","position":3,"sentences":3,"sha256":"d6e0c3f00e47f85c","source":"dw1","span":"dw1#1.3","words":16}
 ```
 
-Segmentation modes decide the locators: `numbered` uses the rule numbers of the text (`4.2a`, parent by number), `headings` uses heading slugs joined by `/` with numbered items beneath a heading, `sentences` gives every sentence a locator `s-<8 hex>` taken from its hash, and `boundaries` takes the spans from a boundaries file. `segment` writes nothing unless its own checks pass: no duplicate locators, at least one span, locators not descending among siblings, and page numbers not decreasing.
+Segmentation modes decide the locators: `numbered` uses the rule numbers of the text (`4.2a`, parent by number), `headings` uses heading slugs joined by `/` with numbered items beneath a heading, `sentences` gives every sentence a locator `s-<8 hex>` taken from its hash, and `boundaries` takes the spans from a boundaries file. `segment` writes nothing unless its own checks pass: no duplicate locators, every locator citable (`locator-invalid`), at least one span, locators not descending among siblings, and page numbers not decreasing. A sentence that appears twice gets `s-<8 hex>` for its first occurrence and `s-<8 hex>-2`, `-3` for the repeats.
 
 A boundaries file proposes spans for the `boundaries` mode, so that an agent can mark the spans of a document the rule-based modes cannot read and the tool still checks and hashes them. One JSON object per line. Offsets are character offsets into the extracted text, the end exclusive.
 
@@ -529,7 +529,7 @@ extensions:
 |---|---|
 | `ruleset` | The ruleset's id. Lowercase letters, digits and hyphens, starting with a letter. |
 | `schemaVersion` | The schema version; 1. Each note's `schema` must equal it. |
-| `sources` | The registered sources. Each entry has `key` (the source key), `note` (the id of its source note, which must exist) and optionally `supersedes` (the key of a registered source it replaces, never its own). Keys are unique. `ingest` adds an entry; it rewrites the file, so comments in it are lost. |
+| `sources` | The registered sources. Each entry has `key` (the source key), `note` (the id of its source note, which must exist) and optionally `supersedes` (the key of a registered source it replaces, never its own). Keys are unique. `ingest` adds an entry as text after the last source, so comments and layout elsewhere in the file are kept. |
 | `scope` | For each source key, the locator prefixes that are in scope for coverage. An empty list, or no entry, puts the whole source in scope. A prefix covers the span with that locator and spans beneath it, so `4` covers `4`, `4.1` and `4/a`, and does not cover `40`. Every key must be registered. This is not the note-level `scope` attribute, which lists variants. |
 | `extensions` | Additions to the fixed schema; see below. |
 
@@ -647,6 +647,7 @@ Every source has its own span file, written by `segment` after `ingest`. A regis
 | `superseded-without-successor` | error | A `superseded` note with no `refines` or `resolved-by` edge. |
 | `schema-version-mismatch` | error | A note whose `schema` differs from the ruleset's `schemaVersion`. |
 | `ruleset-invalid` | error | A `_ruleset.yaml` that cannot be read, has unknown keys, has a wrong schema version, an unregistered or missing source, or an extension that breaks the rules above. |
+| `transaction-incomplete` | error | A journal directory (`.sabot-txn-*`) or a staged file (`.sabot-new-*`) left at the vault by a write that was killed. `sabot recover` rolls it back. |
 | `quotation-long` | error | A quoted run of 60 or more characters in a body: paraphrase it. |
 | `overrides-and-exception` | warning | One pair of notes joined by both `overrides` and `exception-to`. |
 | `body-link` | warning | A wikilink in a body, which is not an edge. |

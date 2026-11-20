@@ -61,18 +61,18 @@ def segment(
     source_key: str,
     mode: SegmentMode,
     numbering: Numbering = "dotted",
-    skip_pages: int = 1,
+    skip_pages: int = 0,
     *,
     boundaries: str | None = None,
 ) -> SegmentResult:
     """Segment extracted text into span records; no file is written here.
 
-    `skip_pages` applies to numbered mode only: the leading pages of a PDF are a title page, and
-    prose in the other modes is not paginated that way. `boundaries` is the text of a boundaries
-    file and is required, and only used, in `boundaries` mode. A refused input raises
-    `SourceError`; a result whose checks fail is returned with its findings.
+    `skip_pages` applies to numbered mode only, and only to text that has page breaks (form
+    feeds): text without them is one page, which a skip would discard whole. `boundaries` is the
+    text of a boundaries file and is required, and only used, in `boundaries` mode. A refused
+    input raises `SourceError`; a result whose checks fail is returned with its findings.
     """
-    if not re.match(SOURCE_KEY_PATTERN, source_key):
+    if not re.fullmatch(SOURCE_KEY_PATTERN, source_key):
         raise SourceError(
             "source-key-invalid", "a source key is lowercase letters, digits, . and -"
         )
@@ -83,6 +83,8 @@ def segment(
             "boundaries-mismatch", "a boundaries file goes with boundaries mode and only with it"
         )
     index = LineIndex(text)
+    if "\f" not in text:
+        skip_pages = 0
     items: Sequence[Item]
     skips: Sequence[_boundaries.Skip]
     if mode == "boundaries":

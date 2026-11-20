@@ -4,6 +4,7 @@ from pathlib import Path
 
 from conftest import FIXTURES, CliResult, CliRunner
 from source_vaults import error_code, snapshot, write_text
+from support.filesystem import require_case_insensitive
 
 RULES_E1 = FIXTURES / "rules-e1.txt"
 NOTE = "model/patterns/og.high-water.md"
@@ -198,3 +199,39 @@ def test_overlap_refuses_unusable_input(
         # Then it refuses with that code and exit 3
         assert result.returncode == 3, code
         assert error_code(result) == code
+
+
+def test_a_lone_fail_at_below_the_default_warn_at_is_accepted(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a body with a 9-word run
+    nine = "the combined weight of the cargo on a boat"
+    _plant(driftwood_vault, f"Note that {nine} matters.")
+
+    # When only --fail-at is given, lower than the default --warn-at of 8
+    result = _overlap(run_cli, driftwood_vault, "--fail-at", "6")
+
+    # Then the thresholds are accepted, with warning no later than failing, and the run fails
+    assert result.returncode == 1
+    assert result.json()["warnAt"] == 6
+    assert result.json()["failAt"] == 6
+    assert _entry(result)["status"] == "fail"
+
+
+def test_a_source_text_spelled_in_another_letter_case_is_still_inside_the_vault(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a file system that ignores letter case, and source text kept in the vault
+    require_case_insensitive(driftwood_vault.parent)
+    inside = driftwood_vault / "spans" / "source.txt"
+    inside.write_bytes(RULES_E1.read_bytes())
+    spelled = driftwood_vault.parent / driftwood_vault.name.upper() / "spans" / "source.txt"
+
+    # When the vault's own path is spelled in capitals for --source-text
+    result = run_cli(
+        "overlap", "--source-text", str(spelled), "--vault", str(driftwood_vault), "--json"
+    )
+
+    # Then overlap refuses it as it refuses the exact spelling
+    assert result.returncode == 3
+    assert error_code(result) == "source-text-inside-vault"

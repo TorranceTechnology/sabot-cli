@@ -1,8 +1,10 @@
 """Reading the files the edition commands take: span files by key, and extracted text."""
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
+from sabot_cli.sources._boundaries import own_ranges
 from sabot_cli.sources._records import SpanIndex, read_spans
 from sabot_cli.sources._types import SOURCE_KEY_PATTERN, SourceError
 
@@ -12,7 +14,7 @@ SPANS_DIRECTORY = "spans"
 
 def check_key(key: str) -> str:
     """The key itself, or `SourceError` `source-key-invalid`."""
-    if not _KEY.match(key):
+    if not _KEY.fullmatch(key):
         raise SourceError(
             "source-key-invalid", "a source key is lowercase letters, digits, . and -"
         )
@@ -33,6 +35,18 @@ def read_edition_spans(vault: Path, key: str) -> SpanIndex:
             f"the vault has no {SPANS_DIRECTORY}/{key}.jsonl; run segment first",
         )
     return read_spans(path)
+
+
+def read_edition_ranges(vault: Path, key: str) -> Mapping[str, tuple[int, int]] | None:
+    """The text range each span of an edition owns, from its boundaries file in the vault.
+
+    Only an edition segmented in `boundaries` mode has one (`spans/<key>.boundaries.jsonl`);
+    for any other the result is None and a span is read as running to the next span's start.
+    """
+    path = vault / SPANS_DIRECTORY / f"{check_key(key)}.boundaries.jsonl"
+    if not path.is_file():
+        return None
+    return own_ranges(read_text_file(path))
 
 
 def read_text_file(path: Path) -> str:

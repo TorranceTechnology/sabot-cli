@@ -16,8 +16,10 @@ from sabot_cli.sources import (
     read_text_file,
 )
 from sabot_cli.vault import load_vault
+from sabot_cli.vault.paths import relative_within
 
 NAME = "overlap"
+_DEFAULT_WARN_AT = 8
 
 
 def register(subparsers: Subparsers) -> None:
@@ -31,7 +33,10 @@ def register(subparsers: Subparsers) -> None:
         "--fail-at", type=int, default=10, metavar="WORDS", help="run length that fails"
     )
     parser.add_argument(
-        "--warn-at", type=int, default=8, metavar="WORDS", help="run length that warns"
+        "--warn-at",
+        type=int,
+        metavar="WORDS",
+        help="run length that warns (default: 8, or --fail-at when that is lower)",
     )
     add_vault_option(parser)
     add_json_option(parser)
@@ -54,7 +59,9 @@ def run(args: argparse.Namespace) -> int:
         bodies = _select_bodies(
             vault, {n.path.as_posix(): n.body for n in loaded.notes.values()}, args.paths
         )
-        report = overlap(source, bodies, int(args.fail_at), int(args.warn_at))
+        fail_at = int(args.fail_at)
+        warn_at = min(_DEFAULT_WARN_AT, fail_at) if args.warn_at is None else int(args.warn_at)
+        report = overlap(source, bodies, fail_at, warn_at)
     except RulesetError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
     except SourceError as error:
@@ -68,7 +75,7 @@ def run(args: argparse.Namespace) -> int:
 
 
 def _is_inside(path: Path, directory: Path) -> bool:
-    return directory.resolve() in (path.resolve(), *path.resolve().parents)
+    return relative_within(path, directory) is not None
 
 
 def _select_bodies(vault: Path, bodies: dict[str, str], paths: list[Path]) -> dict[str, str]:
@@ -76,15 +83,12 @@ def _select_bodies(vault: Path, bodies: dict[str, str], paths: list[Path]) -> di
     if not paths:
         return bodies
     chosen: dict[str, str] = {}
-    root = vault.resolve()
     for path in paths:
         candidate = path if path.exists() else vault / path
-        try:
-            relative = candidate.resolve().relative_to(root).as_posix()
-        except ValueError as error:
-            raise SourceError(
-                "path-outside-vault", f"{path.name} is not under the vault"
-            ) from error
+        inside = relative_within(candidate, vault)
+        if inside is None:
+            raise SourceError("path-outside-vault", f"{path.name} is not under the vault")
+        relative = inside.as_posix()
         if relative not in bodies:
             raise SourceError("path-not-a-note", f"{relative} is not a note the vault could read")
         chosen[relative] = bodies[relative]

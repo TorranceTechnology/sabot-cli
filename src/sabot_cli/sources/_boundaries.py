@@ -21,6 +21,7 @@ from sabot_cli.sources._items import Item
 from sabot_cli.sources._lines import LineIndex, is_page_furniture
 from sabot_cli.sources._records import dump_compact
 from sabot_cli.sources._spanref import locator_problem
+from sabot_cli.sources._types import SourceError
 
 BOUNDARY_CHECKS: tuple[str, ...] = (
     "child-outside-parent",
@@ -157,6 +158,24 @@ def check_boundaries(text: str, index: LineIndex) -> tuple[BoundariesPlan | None
         unique = sorted(set(findings), key=lambda f: (f.check, f.detail))
         return None, unique
     return _plan(spans, skips, by_locator, index), []
+
+
+def own_ranges(text: str) -> dict[str, tuple[int, int]]:
+    """The range of text each span of a boundaries file owns, by locator.
+
+    A leaf owns its whole range and a parent the text before its first child, which is what
+    the span file's hashes were taken over. Raises `SourceError` `span-file-invalid` when a
+    record is malformed.
+    """
+    findings: list[Finding] = []
+    spans, _ = _parse(text, findings)
+    if findings:
+        raise SourceError("span-file-invalid", "a boundaries file has a record that is malformed")
+    by_locator: dict[str, _Span] = {}
+    for span in spans:
+        by_locator.setdefault(span.locator, span)
+    children = _children(spans, by_locator)
+    return {locator: _own_range(span, children) for locator, span in by_locator.items()}
 
 
 def _tree_findings(spans: Sequence[_Span], by_locator: Mapping[str, _Span]) -> list[Finding]:

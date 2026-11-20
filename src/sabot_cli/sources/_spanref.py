@@ -12,9 +12,10 @@ from dataclasses import dataclass
 from sabot_cli.sources._types import SOURCE_KEY_PATTERN
 
 _SEGMENT = r"[a-z0-9]+(?:[.-][a-z0-9]+)*"
-_LOCATOR = re.compile(rf"^{_SEGMENT}(?:/{_SEGMENT})*$")
+_LOCATOR = re.compile(rf"{_SEGMENT}(?:/{_SEGMENT})*")
 _SOURCE_KEY = re.compile(SOURCE_KEY_PATTERN)
-_SENTENCE_SEGMENT = re.compile(r"^s[1-9][0-9]*$")
+_SENTENCE_SEGMENT = re.compile(r"s[1-9][0-9]*")
+_SENTENCE_LIKE = re.compile(r"s[0-9]+")
 
 
 class SpanRefError(ValueError):
@@ -38,9 +39,9 @@ class SpanRef:
 
 def locator_problem(locator: str) -> str | None:
     """Why a string cannot be a locator, or None when it can."""
-    if not _LOCATOR.match(locator):
+    if not _LOCATOR.fullmatch(locator):
         return "a locator is lowercase letters, digits, dots and hyphens, with / between parts"
-    if _SENTENCE_SEGMENT.match(locator.rsplit("/", 1)[-1]):
+    if _SENTENCE_LIKE.fullmatch(locator.rsplit("/", 1)[-1]):
         return "a locator may not end in a part that reads as a sentence, such as s1"
     return None
 
@@ -48,14 +49,14 @@ def locator_problem(locator: str) -> str | None:
 def parse_span_ref(ref: str) -> SpanRef:
     """Parse one span reference; raise `SpanRefError` when it does not fit the grammar."""
     source, separator, rest = ref.partition("#")
-    if not separator or not _SOURCE_KEY.match(source):
+    if not separator or not _SOURCE_KEY.fullmatch(source):
         raise SpanRefError("a span reference is <source-key>#<locator>")
     sentence: int | None = None
     subtree = False
     head, slash, tail = rest.rpartition("/")
     if slash and tail == "*":
         rest, subtree = head, True
-    elif slash and _SENTENCE_SEGMENT.match(tail):
+    elif slash and _SENTENCE_SEGMENT.fullmatch(tail):
         rest, sentence = head, int(tail[1:])
     if (problem := locator_problem(rest)) is not None:
         raise SpanRefError(problem)

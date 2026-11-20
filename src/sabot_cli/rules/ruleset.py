@@ -1,5 +1,7 @@
 """`_ruleset.yaml`: the ruleset's identity, its sources, its scope and its schema extensions."""
 
+import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -269,40 +271,120 @@ def _optional_list(entry: Mapping[str, object], key: str, where: str) -> tuple[s
     return _text_list(entry[key], f"{where}.{key}")
 
 
-class _IndentedDumper(yaml.SafeDumper):
-    """A safe dumper that indents list items under their key, as the shipped files do."""
+_BOM = b"\xef\xbb\xbf"
+_SOURCES_LINE = re.compile(r"^sources:(?P<rest>.*)$")
+_EMPTY_FLOW = re.compile(r"^\s*\[\s*\]\s*(?P<comment>#.*)?$")
+_BARE = re.compile(r"^\s*(?P<comment>#.*)?$")
+_ITEM_INDENT = re.compile(r"^(?P<indent>\s*)- ")
+_PLAIN_SCALAR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
-    def increase_indent(self, flow: bool = False, indentless: bool = False) -> None:
-        super().increase_indent(flow, False)
+
+def _scalar(value: str) -> str:
+    """The value as YAML text that reads back as the same string: plain when it safely can."""
+    if _PLAIN_SCALAR.match(value) and load_yaml(value) == value:
+        return value
+    return json.dumps(value, ensure_ascii=False)
 
 
-def register_source(root: Path, key: str, note_id: str, supersedes: str | None = None) -> None:
-    """Append a source to `_ruleset.yaml`, keeping its other content and key order.
+def _block_end(lines: list[str], start: int) -> int:
+    """The index after the last content line of the block that begins after `start`."""
+    end = start + 1
+    index = start + 1
+    while index < len(lines):
+        line = lines[index]
+        if line.strip() == "":
+            index += 1
+            continue
+        if line[0] not in " \t-":
+            break
+        index += 1
+        end = index
+    return end
 
-    PyYAML drops comments and normalises quoting and list layout; the result is stable, so a
-    second rewrite of its own output changes nothing. Raises `RulesetError` when `key` is
-    already registered or the file is not a ruleset.
+
+def ruleset_with_source(root: Path, key: str, note_id: str, supersedes: str | None = None) -> bytes:
+    """The bytes of `_ruleset.yaml` with one more source registered; nothing is written.
+
+    The entry is inserted as text after the last registered source, so comments, quoting and
+    layout elsewhere are untouched, and the result is parsed again to prove that the only change
+    is the new entry. A value YAML would read as a number is quoted. Raises `RulesetError` when
+    `key` is already registered, when the file is not a ruleset (`ruleset-invalid`), when its
+    `sources` entry is written in a form that cannot be extended in place
+    (`ruleset-not-editable`), or when the result does not parse as expected
+    (`ruleset-rewrite-invalid`).
     """
-    path = root / RULESET_FILE
     ruleset = load_ruleset(root)
     if any(source.key == key for source in ruleset.sources):
         raise RulesetError("source-key-registered", f"the source key {key!r} is already registered")
-    document = load_yaml(path.read_bytes().decode("utf-8-sig"))
-    assert isinstance(document, dict)  # load_ruleset has just parsed it as a mapping
-    sources = document.get("sources")
-    if not isinstance(sources, list):
-        sources = []
-        document["sources"] = sources
-    entry: dict[str, str] = {"key": key, "note": note_id}
+    raw = (root / RULESET_FILE).read_bytes()
+    before = raw.decode("utf-8-sig")
+    lines = before.replace("\r\n", "\n").split("\n")
+    entry = [f"  - key: {_scalar(key)}", f"    note: {_scalar(note_id)}"]
     if supersedes is not None:
-        entry["supersedes"] = supersedes
-    sources.append(entry)
-    text = yaml.dump(
-        document,
-        Dumper=_IndentedDumper,
-        sort_keys=False,
-        default_flow_style=False,
-        allow_unicode=True,
-        width=100,
+        entry.append(f"    supersedes: {_scalar(supersedes)}")
+    _insert_entry(lines, entry)
+    after = "\n".join(lines)
+    _check_registration(before, after, key, note_id, supersedes)
+    if "\r\n" in before:
+        after = after.replace("\n", "\r\n")
+    return (_BOM if raw.startswith(_BOM) else b"") + after.encode("utf-8")
+
+
+def _insert_entry(lines: list[str], entry: list[str]) -> None:
+    for index, line in enumerate(lines):
+        found = _SOURCES_LINE.match(line)
+        if found is None:
+            continue
+        rest = found.group("rest")
+        if (flow := _EMPTY_FLOW.match(rest)) is not None:
+            comment = flow.group("comment")
+            lines[index : index + 1] = [f"sources: {comment}" if comment else "sources:", *entry]
+        elif _BARE.match(rest):
+            end = _block_end(lines, index)
+            indent = next(
+                (
+                    item.group("indent")
+                    for item in map(_ITEM_INDENT.match, lines[index + 1 : end])
+                    if item is not None
+                ),
+                "  ",
+            )
+            lines[end:end] = [
+                f"{indent}{text[2:]}" if text.startswith("  ") else text for text in entry
+            ]
+        else:
+            raise RulesetError(
+                "ruleset-not-editable",
+                f"{RULESET_FILE}: sources is written in a form that cannot be extended in place; "
+                "add the source entry by hand",
+            )
+        return
+    # No sources entry at all: append one, after the file's final newline if it has one.
+    tail = [] if lines[-1] != "" else [lines.pop()]
+    lines += ["sources:", *entry, *tail]
+
+
+def _check_registration(
+    before: str, after: str, key: str, note_id: str, supersedes: str | None
+) -> None:
+    try:
+        old = load_yaml(before)
+        new = load_yaml(after)
+        assert isinstance(old, dict)
+        sources = old.get("sources")
+        added: dict[str, str] = {"key": key, "note": note_id}
+        if supersedes is not None:
+            added["supersedes"] = supersedes
+        expected = {**old, "sources": [*(sources if isinstance(sources, list) else []), added]}
+        if new != expected:
+            raise _rewrite_invalid()
+        _parse(new)
+    except yaml.YAMLError as error:
+        raise _rewrite_invalid() from error
+
+
+def _rewrite_invalid() -> RulesetError:
+    return RulesetError(
+        "ruleset-rewrite-invalid",
+        f"{RULESET_FILE} could not be extended line by line; add the source entry by hand",
     )
-    path.write_bytes(text.encode("utf-8"))

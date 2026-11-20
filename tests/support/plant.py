@@ -185,6 +185,14 @@ def _ruleset_invalid(vault_root: Path) -> PlantedDefect:
     return PlantedDefect("ruleset-invalid", _relative(vault_root, path), None)
 
 
+def _transaction_incomplete(vault_root: Path) -> PlantedDefect:
+    """Leave a journal directory behind, as a write killed part-way does."""
+    journal = vault_root / ".sabot-txn-planted"
+    journal.mkdir()
+    (journal / "journal.json").write_bytes(b"{}\n")
+    return PlantedDefect("transaction-incomplete", _relative(vault_root, journal), None)
+
+
 def register_second_edition(vault_root: Path) -> tuple[PurePosixPath, PurePosixPath]:
     """Register dw2 as the successor of dw1, in the ruleset and on its source note.
 
@@ -332,6 +340,7 @@ _VAULT_DEFECTS: dict[str, Callable[[Path], PlantedDefect]] = {
         root, "schema-version-mismatch", lambda n: n.set_scalar("schema", "2")
     ),
     "ruleset-invalid": _ruleset_invalid,
+    "transaction-incomplete": _transaction_incomplete,
     "quotation-long": lambda root: _edit_host(
         root, "quotation-long", lambda n: n.append_to_body(_long_quotation())
     ),

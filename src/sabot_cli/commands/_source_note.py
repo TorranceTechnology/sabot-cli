@@ -12,9 +12,14 @@ from sabot_cli.vault import load_yaml
 _DELIMITER = "---"
 
 
+def note_relative(key: str) -> str:
+    """The vault-relative path of the source note for `key`."""
+    return f"sources/src.{key}.md"
+
+
 def note_path(vault: Path, key: str) -> Path:
     """Where the source note for `key` lives in a vault."""
-    return vault / "sources" / f"src.{key}.md"
+    return vault / note_relative(key)
 
 
 @dataclass(frozen=True)
@@ -87,7 +92,8 @@ def with_segmenter(text: str, mode: str) -> str:
     closing = next((i for i in range(1, len(lines)) if lines[i].rstrip() == _DELIMITER), None)
     if lines[0].rstrip() != _DELIMITER or closing is None:
         raise SourceError("source-note-invalid", "the source note has no front matter")
-    entry = f"segmenter: {mode}"
+    carriage = "\r" if lines[0].endswith("\r") else ""
+    entry = f"segmenter: {mode}{carriage}"
     for index in range(1, closing):
         if lines[index].startswith("segmenter:"):
             lines[index] = entry

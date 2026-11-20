@@ -291,3 +291,63 @@ def test_the_walk_skips_readmes_and_directories_starting_with_underscore_or_dot(
     # Then none of them is read, so nothing is refused and the note count is unchanged
     assert result.returncode == 0
     assert result.json()["notes"] == 54
+
+
+def test_compile_out_refuses_a_path_that_names_a_note(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a note of the vault
+    note = driftwood_vault / "clauses" / "cl.setup.md"
+    before = note.read_bytes()
+
+    # When the graph is to be written over it
+    result = run_cli("compile", "--out", str(note), "--vault", str(driftwood_vault), "--json")
+
+    # Then compile refuses and the note is untouched
+    assert result.returncode == 3
+    assert result.json()["error"]["code"] == "out-is-a-note"  # type: ignore[index]
+    assert note.read_bytes() == before
+
+
+def test_compile_out_refuses_a_directory(run_cli: CliRunner, driftwood_vault: Path) -> None:
+    # Given --out naming a directory
+    # When compile runs
+    result = run_cli(
+        "compile", "--out", str(driftwood_vault / "clauses"), "--vault", str(driftwood_vault),
+        "--json",
+    )  # fmt: skip
+
+    # Then it refuses instead of raising
+    assert result.returncode == 3
+    assert result.json()["error"]["code"] == "out-is-a-directory"  # type: ignore[index]
+
+
+def test_compile_out_under_an_unwritable_root_is_a_refusal(
+    run_cli: CliRunner, driftwood_vault: Path, tmp_path: Path
+) -> None:
+    # Given an --out whose parent would have to sit below a file
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file\n", encoding="utf-8")
+
+    # When the graph is written there
+    result = run_cli(
+        "compile", "--out", str(blocker / "graph.json"), "--vault", str(driftwood_vault), "--json"
+    )
+
+    # Then compile refuses with write-failed, not a traceback
+    assert result.returncode == 3
+    assert result.json()["error"]["code"] == "write-failed"  # type: ignore[index]
+
+
+def test_compile_out_outside_the_vault_leaves_no_staged_file(
+    run_cli: CliRunner, driftwood_vault: Path, tmp_path: Path
+) -> None:
+    # Given an output directory outside the vault
+    out = tmp_path / "out" / "graph.json"
+
+    # When the graph is written there twice
+    run_cli("compile", "--out", str(out), "--vault", str(driftwood_vault))
+    run_cli("compile", "--out", str(out), "--vault", str(driftwood_vault))
+
+    # Then the directory holds the graph alone
+    assert [path.name for path in out.parent.iterdir()] == ["graph.json"]

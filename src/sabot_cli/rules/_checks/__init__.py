@@ -42,6 +42,7 @@ from sabot_cli.rules._checks._structure import (
     _check_schema_version_mismatch,
     _check_type_unknown,
 )
+from sabot_cli.rules._checks._transaction import _check_transaction_incomplete
 from sabot_cli.rules._checks._values import _check_attribute_unknown, _check_enum_invalid
 
 type Check = Callable[[LintContext], Iterable[Report]]
@@ -92,6 +93,9 @@ CLASSES: tuple[LintClass, ...] = (
     LintClass("superseded-without-successor", _ERROR, _check_superseded_without_successor),
     LintClass("schema-version-mismatch", _ERROR, _check_schema_version_mismatch),
     LintClass("ruleset-invalid", _ERROR, _check_ruleset_invalid, needs_extensions=False),
+    LintClass(
+        "transaction-incomplete", _ERROR, _check_transaction_incomplete, needs_extensions=False
+    ),
     LintClass("quotation-long", _ERROR, _check_quotation_long),
     LintClass("overrides-and-exception", _WARNING, _check_overrides_and_exception),
     LintClass("body-link", _WARNING, _check_body_link),

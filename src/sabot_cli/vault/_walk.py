@@ -4,12 +4,15 @@ from pathlib import Path
 
 _SKIPPED_FILE = "README.md"
 _SKIPPED_DIRECTORY_PREFIXES = ("_", ".")
+_HIDDEN_PREFIX = "."
 
 
 def note_files(root: Path) -> list[Path]:
     """Return every note file under `root`, sorted by POSIX path relative to it.
 
-    A directory whose name starts with `_` or `.` is not entered, and `README.md` is not a note.
+    A directory whose name starts with `_` or `.` is not entered, a file whose name starts with
+    `.` is not a note (a transaction's staged files are hidden for this reason), and `README.md`
+    is not a note.
     """
     found: list[Path] = []
     pending = [root]
@@ -19,6 +22,10 @@ def note_files(root: Path) -> list[Path]:
             if entry.is_dir():
                 if not entry.name.startswith(_SKIPPED_DIRECTORY_PREFIXES):
                     pending.append(entry)
-            elif entry.suffix == ".md" and entry.name != _SKIPPED_FILE:
+            elif (
+                entry.suffix == ".md"
+                and entry.name != _SKIPPED_FILE
+                and not entry.name.startswith(_HIDDEN_PREFIX)
+            ):
                 found.append(entry)
     return sorted(found, key=lambda path: path.relative_to(root).as_posix())

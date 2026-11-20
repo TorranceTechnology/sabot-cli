@@ -20,6 +20,7 @@ from sabot_cli.sources import (
     stale_reason_to_write,
 )
 from sabot_cli.vault import load_vault
+from sabot_cli.vault.transaction import Transaction, TransactionError
 
 NAME = "migrate-edition"
 
@@ -40,12 +41,23 @@ def run(args: argparse.Namespace) -> int:
     """Execute the command and return its exit code.
 
     Every note is planned and rewritten in memory first, so a note that cannot be edited safely
-    refuses the whole run before any file is written.
+    refuses the whole run before any file is written; the rewrites are then written together,
+    all or none. A dry run writes nothing and takes no lock.
     """
     as_json = bool(args.json)
+    if args.dry_run:
+        return _migrate(args, None, as_json=as_json)
+    try:
+        with Transaction(args.vault) as transaction:
+            return _migrate(args, transaction, as_json=as_json)
+    except TransactionError as error:
+        return output.refuse(NAME, error.code, error.message, as_json=as_json)
+
+
+def _migrate(args: argparse.Namespace, transaction: Transaction | None, *, as_json: bool) -> int:
     vault: Path = args.vault
     old_key, new_key = str(args.old_key), str(args.new_key)
-    dry_run = bool(args.dry_run)
+    dry_run = transaction is None
     try:
         load_ruleset(vault)
         check_key(old_key)
@@ -81,20 +93,26 @@ def run(args: argparse.Namespace) -> int:
         code = error.code if isinstance(error, SourceError) else "note-unreadable"
         message = error.message if isinstance(error, SourceError) else "a note cannot be read"
         return output.refuse(NAME, code, message, as_json=as_json)
-    if not dry_run:
+    if transaction is not None:
         for relative, data in edits.items():
-            (vault / relative).write_bytes(data)
+            transaction.put(relative, data)
+        transaction.commit()
     moved_to = {m.new for m in diff.moved}
     added = [locator for locator in diff.added if locator not in moved_to]
     for name in outcomes:
         outcomes[name].sort()
     changed = sorted(edits)
+    unparsed = sorted(problem.path.as_posix() for problem in loaded.problems)
     if as_json:
         output.write_json(
-            _document(old_key, new_key, dry_run, outcomes, added, changed, sorted(unresolved))
+            _document(
+                old_key, new_key, dry_run, outcomes, added, changed, sorted(unresolved), unparsed
+            )
         )
     else:
-        output.write_text(_text(old_key, new_key, dry_run, outcomes, added, changed, unresolved))
+        output.write_text(
+            _text(old_key, new_key, dry_run, outcomes, added, changed, unresolved, unparsed)
+        )
     return int(ExitCode.OK)
 
 
@@ -114,6 +132,7 @@ def _document(
     added: Sequence[str],
     changed: Sequence[str],
     unresolved: Sequence[tuple[str, str]],
+    unparsed: Sequence[str],
 ) -> dict[str, JsonValue]:
     return {
         "added": list(added),
@@ -125,6 +144,7 @@ def _document(
         "new": new_key,
         "old": old_key,
         "outcomes": {name: list(ids) for name, ids in outcomes.items()},
+        "unparsed": list(unparsed),
         "unresolved": [{"note": note, "reference": raw} for note, raw in unresolved],
         "written": not dry_run and bool(changed),
     }
@@ -138,6 +158,7 @@ def _text(
     added: Sequence[str],
     changed: Sequence[str],
     unresolved: Sequence[tuple[str, str]],
+    unparsed: Sequence[str],
 ) -> str:
     lines = [f"{old_key} -> {new_key}{' (dry run, nothing written)' if dry_run else ''}"]
     for name, ids in outcomes.items():
@@ -148,6 +169,7 @@ def _text(
         *((name, list(ids)) for name, ids in outcomes.items()),
         ("added spans", list(added)),
         ("unresolved citations", [f"{note}: {raw}" for note, raw in unresolved]),
+        ("notes not read (their front matter does not parse; check them by hand)", list(unparsed)),
     ]
     for name, items in sections:
         if items:
