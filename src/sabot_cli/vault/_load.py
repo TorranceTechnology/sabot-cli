@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
-from sabot_cli.vault import _frontmatter, _links, _walk
+from sabot_cli.vault import _frontmatter, _links, walk
 from sabot_cli.vault._model import Link, Note, Problem, ProblemKind, Vault
 from sabot_cli.vault.text import TextFileError, read_text
 
@@ -20,7 +20,7 @@ def load_vault(root: Path, link_properties: frozenset[str]) -> Vault:
     """
     notes: dict[str, Note] = {}
     problems: list[Problem] = []
-    for file in _walk.note_files(root):
+    for file in walk.note_files(root):
         relative = PurePosixPath(file.relative_to(root).as_posix())
         try:
             properties, body = _frontmatter.parse(read_text(file))

@@ -23,16 +23,27 @@ from sabot_cli.rules import (
 )
 from sabot_cli.vault import Vault
 from sabot_cli.vault.paths import display_path, relative_within
-from sabot_cli.vault.transaction import Transaction, TransactionError, atomic_write
+from sabot_cli.vault.transaction import (
+    Transaction,
+    TransactionError,
+    atomic_write,
+    is_vault_path,
+)
 
 NAME = "compile"
-DEFAULT_GRAPH_PATH = Path("_index") / "graph.json"
+_INDEX_DIRECTORY = "_index"
+DEFAULT_GRAPH_PATH = Path(_INDEX_DIRECTORY) / "graph.json"
 
 
 def register(subparsers: Subparsers) -> None:
     """Add the `compile` subparser."""
     parser = subparsers.add_parser(NAME, help="write the machine graph")
-    parser.add_argument("--out", type=Path, metavar="PATH", help="where to write the graph")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        metavar="PATH",
+        help="where to write the graph (default: _index/graph.json in the vault)",
+    )
     parser.add_argument(
         "--check", action="store_true", help="fail if the written graph is out of date"
     )
@@ -89,7 +100,7 @@ def _compile(
         up_to_date = current == text.encode("utf-8")
         _report(graph, shown, as_json=as_json, written=False, up_to_date=up_to_date)
         return int(ExitCode.OK if up_to_date else ExitCode.FINDINGS)
-    if refusal := _out_refusal(target, root, vault):
+    if refusal := _out_refusal(target, root):
         return output.refuse(NAME, refusal[0], refusal[1], as_json=as_json)
     try:
         if transaction is not None:
@@ -107,16 +118,24 @@ def _compile(
     return int(ExitCode.OK)
 
 
-def _out_refusal(target: Path, root: Path, vault: Vault) -> tuple[str, str] | None:
-    """Why `--out` may not be written, as (code, message): it names a directory or a note."""
+def _out_refusal(target: Path, root: Path) -> tuple[str, str] | None:
+    """Why `--out` may not be written, as (code, message).
+
+    A directory is refused. Inside the vault only a file below `_index/` may be named: any
+    other path is a note, the ruleset, a span file or another file the tools read, and
+    overwriting one with the graph would corrupt the vault.
+    """
     if target.is_dir():
         return "out-is-a-directory", "--out names a directory; name a file"
     inside = relative_within(target, root)
     if inside is None:
         return None
-    notes = {note.path for note in vault.notes.values()} | {p.path for p in vault.problems}
-    if inside in notes:
-        return "out-is-a-note", "--out names a note of the vault; the graph would overwrite it"
+    parts = inside.parts
+    if len(parts) < 2 or parts[0] != _INDEX_DIRECTORY or not is_vault_path(inside.as_posix()):
+        return (
+            "out-inside-vault",
+            f"inside the vault, --out may only name a file below {_INDEX_DIRECTORY}/",
+        )
     return None
 
 

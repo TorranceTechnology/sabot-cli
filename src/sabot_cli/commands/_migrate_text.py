@@ -30,8 +30,10 @@ def rewrite_note_text(
     try:
         lines, closing = split_front_matter(text)
     except FrontMatterError as error:
+        # The vault reader parsed this front matter already, so this is a note that changed
+        # since; it is refused like any other note that cannot be rewritten safely.
         raise SourceError(
-            "note-front-matter-invalid", "a note has no front matter to edit"
+            "migration-rewrite-invalid", "a note has no front matter to edit"
         ) from error
     carriage = "\r" if lines[0].endswith("\r") else ""
     if repoints:

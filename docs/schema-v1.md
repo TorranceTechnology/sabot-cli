@@ -49,7 +49,7 @@ The body follows one convention:
 2. The paraphrase, one or more paragraphs in the author's own words. This is the part of the note that says what the source means.
 3. Optionally a `## Notes` section for commentary, history or decisions that are not the paraphrase.
 
-The tools use the convention this way. `compile` records as a note's paraphrase the text between the first `# ` heading and the first `## ` heading. `search` ignores a first heading that repeats the title. `lint` refuses a quoted run of 60 or more characters in the body (`quotation-long`) and warns about any wikilink in the body (`body-link`), because links belong in the front matter. `overlap` measures the longest run of words a body shares with the extracted source text. Write the paraphrase in your own words; do not copy the source.
+The tools use the convention this way. `compile` records as a note's paraphrase the text between the first `# ` heading and the first `## ` heading. `search` ignores a first heading that repeats the title. `lint` refuses a quoted run of 60 or more characters in the body (`quotation-long`, in straight or curly double quotes, curly single quotes or a block quote) and warns about any wikilink in the body that is not inside a code span or fenced code block (`body-link`), because links belong in the front matter. `overlap` measures the longest run of words a body shares with the extracted source text. Write the paraphrase in your own words; do not copy the source.
 
 Front matter values are read narrowly so that the editor cannot change a note's meaning: only `true` and `false`, plain decimal integers and plain decimal numbers are read as such, and everything else, including `yes`, `on` and `2026-01-15`, stays text. Dates must be written `YYYY-MM-DD`. Quote text that YAML would otherwise read as something else.
 
@@ -94,7 +94,7 @@ At the moor phase a hand larger than seven is cut down to seven by discarding.
 
 | Attribute | Type | Rule |
 |---|---|---|
-| `id` | id | Lowercase letters, digits and hyphens in parts separated by dots, starting with a letter (`^[a-z][a-z0-9-]*(\.[a-z0-9-]+)*$`). Stable and never reused. Equals the file name without `.md` and starts with the prefix of the note's type. The part before the first dot may not be a name Windows reserves for a device (`con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`, in any letter case), because a note file is named for its id and could not be checked out there (`id-reserved-name`). |
+| `id` | id | Lowercase letters, digits and hyphens in parts separated by dots, starting with a letter (`^[a-z][a-z0-9-]*(\.[a-z0-9-]+)*$`). Stable and never reused. Equals the file name without `.md` and starts with the prefix of the note's type. The part before the first dot may not be a name Windows reserves for a device (`con`, `prn`, `aux`, `nul`, `conin$`, `conout$`, `com1` to `com9` and `lpt1` to `lpt9` with the superscript digits `¹ ² ³` as well, in any letter case, trailing spaces ignored), because a note file is named for its id and could not be checked out there (`id-reserved-name`). |
 | `type` | enum | A node type: a fixed type below or one the ruleset declares. |
 | `title` | text | A short label in the author's own words. |
 | `status` | enum | One of `mapped`, `refused`, `derived`, `structural`, `pending`, `superseded`. |
@@ -488,7 +488,7 @@ Example record:
 {"editorialSha256":"1ac97d522c5a419d","kind":"span","locator":"1.3","offset":980,"page":3,"parent":"1","position":3,"sentences":3,"sha256":"d6e0c3f00e47f85c","source":"dw1","span":"dw1#1.3","words":16}
 ```
 
-Segmentation modes decide the locators: `numbered` uses the rule numbers of the text (`4.2a`, parent by number), `headings` uses heading slugs joined by `/` with numbered items beneath a heading, `sentences` gives every sentence a locator `s-<8 hex>` taken from its hash, and `boundaries` takes the spans from a boundaries file. `segment` writes no span file unless its own checks pass: no duplicate locators, every locator citable (`locator-invalid`), at least one span, locators not descending among siblings, and page numbers not decreasing. A sentence that appears twice gets `s-<8 hex>` for its first occurrence and `s-<8 hex>-2`, `-3` for the repeats.
+Segmentation modes decide the locators: `numbered` uses the rule numbers of the text (`4.2a`, parent by number), `headings` uses heading slugs joined by `/` with numbered items beneath a heading, `sentences` gives every sentence a locator `s-<8 hex>` taken from its hash, and `boundaries` takes the spans from a boundaries file. `segment` writes no span file unless its own checks pass: no duplicate locators, every locator citable (`locator-invalid`), at least one span, locators not descending among siblings, page numbers not decreasing, and, in `numbered` and `headings` modes, every line that begins with a rule number having its text in some span (`rule-text-unspanned`). A sentence that appears twice gets `s-<8 hex>` for its first occurrence and `s-<8 hex>-2`, `-3` for the repeats, and a heading repeated under one parent gets `-2`, `-3` the same way. A line that begins with a number is a rule, except that a decimal inside a sentence that a line broke before is read as part of the line before it: that only happens when no blank line comes between, the number is not the one the list reaches next (the first child or next sibling of the open rule, or of one of its ancestors), the line before does not end a sentence and the text after the number begins in lower case. A source key may not end in `.boundaries`, because `spans/<key>.boundaries.jsonl` is the boundaries file of the source `<key>`. A boundaries file in `spans/` is read only for a source whose note says `segmenter: boundaries`, and segmenting again in another mode removes it.
 
 A boundaries file proposes spans for the `boundaries` mode, so that an agent can mark the spans of a document the rule-based modes cannot read and the tool still checks and hashes them. One JSON object per line. Offsets are character offsets into the extracted text, the end exclusive.
 
@@ -614,7 +614,7 @@ The `kind` says what the document is:
 - `errata` corrects an edition. Register it as its own source with `ingest --kind errata --amends <key>`; the new note records `amends`. Notes cite its spans under its own key, so the correction and the text it corrects stay separate. `amends` is recorded on the note only; `_ruleset.yaml` has no field for it, and `lint` does not read it.
 - `ruling` and `faq` are published decisions and answers kept as sources in the same way. They are not the `ruling` node type, which is a note about one decision.
 
-Every source has its own span file, written by `segment` after `ingest`. A registered source whose span file is absent makes `coverage` refuse. `coverage` leaves out a source that another registered source supersedes, unless it is named with `--source`. The original file stays outside the vault; `ingest --verify` compares a file with the registered hash.
+Every source has its own span file, written by `segment` after `ingest`. A registered source whose span file is absent makes `coverage` refuse. `coverage` leaves out a source that another registered source supersedes, unless it is named with `--source`, and lists the sources it left out. Sources that supersede each other in a loop are refused (`ruleset-invalid`). The original file stays outside the vault; `ingest --verify` compares a file with the registered hash.
 
 ## Lint classes
 
@@ -628,7 +628,7 @@ Every source has its own span file, written by `segment` after `ingest`. A regis
 | `id-file-mismatch` | error | An `id` that differs from the file name without `.md`. |
 | `id-duplicate` | error | Two notes with one id. The later one in path order is reported and not loaded. |
 | `id-prefix-mismatch` | error | An `id` that does not start with the prefix of the note's type. |
-| `id-reserved-name` | error | An `id`, or a note file name, whose first dot-separated part is a Windows device name. |
+| `id-reserved-name` | error | An `id` whose first dot-separated part is a Windows device name, or any file or directory name below the vault (`.git` aside) that is a device name or ends in a dot or a space. |
 | `type-unknown` | error | A `type` that is neither a fixed node type nor declared. |
 | `enum-invalid` | error | A value of the wrong kind or outside the allowed values: text, `YYYY-MM-DD` date, whole number (with its minimum), true or false, an enum value, or a list element of the wrong kind. |
 | `attribute-unknown` | error | A key that is not an attribute, edge name or inverse name, or an attribute on a node type it is not allowed on. |
@@ -662,7 +662,7 @@ Every source has its own span file, written by `segment` after `ingest`. A regis
 
 ## From the graph to a conformance clause list
 
-`sabot compile` writes `_index/graph.json`: every note as a node with its type, path, attributes and compiled paraphrase, every authored edge, every derived inverse edge, the ruleset's extensions and a digest of the vault: the notes, `_ruleset.yaml` and the `*.jsonl` files directly in `spans/`, so a hidden or stray file there does not change it. It refuses a vault with lint errors. `compile --check` exits 1 when the written graph is out of date.
+`sabot compile` writes `_index/graph.json`: every note as a node with its type, path, attributes and compiled paraphrase, every authored edge, every derived inverse edge, the ruleset's extensions and a digest of the vault: the notes, `_ruleset.yaml` and the `*.jsonl` files directly in `spans/`, so a hidden or stray file there does not change it. It refuses a vault with lint errors. `compile --check` exits 1 when the written graph is out of date. `--out` inside the vault may name only a file below `_index/`; outside it, any new file.
 
 No command in this repository writes a conformance clause list or a classification manifest yet. This section states how the note attributes are meant to map onto them, as the consumer repositories of the engine carry them, so that a generator and an author agree. Check it against the generator when one exists.
 

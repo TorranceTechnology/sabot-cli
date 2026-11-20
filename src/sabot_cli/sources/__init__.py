@@ -22,6 +22,7 @@ from sabot_cli.sources._types import (
     SourceFormat,
     check_key,
     is_source_key,
+    source_note_relative,
     span_file_relative,
 )
 
@@ -57,5 +58,6 @@ __all__ = [
     "read_text_file",
     "segment",
     "sentence_number",
+    "source_note_relative",
     "span_file_relative",
 ]

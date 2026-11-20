@@ -53,12 +53,16 @@ def register(subparsers: Subparsers) -> None:
     )
     parser.add_argument("--url", help="where the file came from")
     parser.add_argument("--effective", metavar="YYYY-MM-DD", help="date the edition took effect")
-    parser.add_argument("--format", choices=("pdf", "html", "text"), help="source format")
+    parser.add_argument(
+        "--format",
+        choices=("pdf", "html", "text"),
+        help="source format (default: detected from the file's content or extension)",
+    )
     parser.add_argument(
         "--kind",
         choices=("edition", "errata", "ruling", "faq"),
         default="edition",
-        help="source kind",
+        help="source kind (default: edition)",
     )
     parser.add_argument("--supersedes", metavar="KEY", help="key of the edition this one replaces")
     parser.add_argument("--amends", metavar="KEY", help="key of the edition this one amends")

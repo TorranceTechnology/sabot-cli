@@ -37,7 +37,7 @@ def _span_locators(vault: Path, key: str = "dw1") -> list[str]:
     return [str(record["locator"]) for record in _spans(vault, key) if record["kind"] == "span"]
 
 
-# A3: the source note is read the way the vault reader reads it.
+# The source note is read the way the vault reader reads it.
 def test_segment_updates_a_source_note_that_starts_with_a_byte_order_mark(
     run_cli: CliRunner, tmp_path: Path
 ) -> None:
@@ -75,7 +75,7 @@ def test_segment_keeps_the_line_endings_of_a_crlf_source_note(
     assert data.count(b"\n") == data.count(b"\r\n")
 
 
-# A4: a text source has no page breaks, so no page is a title page.
+# A text source has no page breaks, so no page is a title page.
 def test_numbered_mode_keeps_text_that_has_no_page_breaks(
     run_cli: CliRunner, tmp_path: Path
 ) -> None:
@@ -108,7 +108,7 @@ def test_skip_pages_applies_only_to_text_with_page_breaks(
     assert without_pages["spans"] == 2
 
 
-# A7: every generated locator must be citable.
+# Every generated locator must be citable.
 @pytest.mark.parametrize("heading", ["S2", "日本"], ids=["reads-as-sentence", "no-ascii"])
 def test_headings_mode_refuses_a_heading_that_cannot_be_cited(
     run_cli: CliRunner, tmp_path: Path, heading: str
@@ -161,7 +161,7 @@ def test_sentences_mode_numbers_a_sentence_that_repeats(run_cli: CliRunner, tmp_
     assert locators[2] == f"{locators[0]}-2"
 
 
-# A13: a wrapped line that begins with a decimal is not a rule.
+# A wrapped line that begins with a decimal is not a rule.
 def test_a_wrapped_decimal_is_not_a_rule_number(run_cli: CliRunner, tmp_path: Path) -> None:
     # Given a rule whose second line begins "2.5 times", with the first line cut mid-sentence
     text = write_text(
@@ -178,7 +178,7 @@ def test_a_wrapped_decimal_is_not_a_rule_number(run_cli: CliRunner, tmp_path: Pa
     assert _span_locators(vault) == ["1.1", "1.2"]
 
 
-# A5: a sentence citation survives only when the same sentence is still there.
+# A sentence citation survives only when the same sentence is still there.
 def test_a_sentence_citation_moves_only_to_the_same_sentence(
     run_cli: CliRunner, tmp_path: Path
 ) -> None:
@@ -203,7 +203,7 @@ def test_a_sentence_citation_moves_only_to_the_same_sentence(
     assert note.properties["source"] == ["dw1#4.1/s2"]
 
 
-# A6: spans with no words are never the same span moved.
+# Spans with no words are never the same span moved.
 def _record(locator: str, words: int, sha: str, position: int) -> SpanRecord:
     return SpanRecord(
         span=f"s#{locator}",
@@ -237,7 +237,7 @@ def test_two_spans_with_no_words_are_not_paired_as_a_move() -> None:
     assert diff.added == ("scoring",)
 
 
-# A8: a boundaries file may skip text between two spans.
+# A boundaries file may skip text between two spans.
 def test_diff_with_texts_reads_a_boundaries_edition_that_skips_text_between_spans(
     run_cli: CliRunner, tmp_path: Path
 ) -> None:
@@ -283,7 +283,7 @@ def _segment_boundaries(
     return _segment(run_cli, vault, text, "boundaries", "--boundaries", str(boundaries), key=key)
 
 
-# A2: a note whose front matter does not parse is reported, not silently skipped.
+# A note whose front matter does not parse is reported, not silently skipped.
 def test_migrate_reports_notes_it_could_not_read(run_cli: CliRunner, driftwood_vault: Path) -> None:
     # Given a note whose front matter is not YAML
     broken = driftwood_vault / "clauses" / "cl.broken.md"
@@ -300,7 +300,7 @@ def test_migrate_reports_notes_it_could_not_read(run_cli: CliRunner, driftwood_v
     assert "error" not in result.json()
 
 
-# A13: a comment in the citation block is not a citation.
+# A comment in the citation block is not a citation.
 def test_migrate_leaves_a_reference_in_a_yaml_comment_alone(
     run_cli: CliRunner, driftwood_vault: Path
 ) -> None:
@@ -315,3 +315,147 @@ def test_migrate_leaves_a_reference_in_a_yaml_comment_alone(
     # Then the citation moved and the comment still reads as written
     rewritten = note.read_text(encoding="utf-8")
     assert '  - "dw2#7.1" # was dw1#7.1 in my notes\n' in rewritten
+
+
+def _segment_locators_of(
+    run_cli: CliRunner, tmp_path: Path, text: str, mode: str = "numbered", *extra: str
+) -> tuple[int, list[str]]:
+    source = write_text(tmp_path / "rules.txt", text)
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": source})
+    code, _ = _segment(run_cli, vault, source, mode, *extra)
+    return code, _span_locators(vault) if (vault / "spans" / "dw1.jsonl").exists() else []
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param(
+            "1. Setup\n1.1 Each player takes five cards.\n\nCombat\n\n"
+            "6.1 d6 rolls decide each attack.\n6.2 The attacker moves first.\n",
+            ["1", "1.1", "6.1", "6.2"],
+            id="after-blank-lines",
+        ),
+        pytest.param(
+            "2. Setup\n2.1 the dealer shuffles the deck.\n2.2 The dealer deals.\n",
+            ["2", "2.1", "2.2"],
+            id="first-child-of-open-rule",
+        ),
+        pytest.param(
+            "4.1 Boats carry cargo\n4.2 mooring-cleat sizes follow harbour law.\n",
+            ["4.1", "4.2"],
+            id="next-sibling-of-open-rule",
+        ),
+        pytest.param(
+            "7.1 Players may rest\n7.2 mAh-rated lanterns are allowed.\n7.3 Lanterns burn oil.\n",
+            ["7.1", "7.2", "7.3"],
+            id="next-sibling-lowercase-start",
+        ),
+        pytest.param(
+            "4.2 Cargo is stowed in order\n4.3 the last crate goes first.\n",
+            ["4.2", "4.3"],
+            id="next-sibling-after-no-sentence-end",
+        ),
+        pytest.param(
+            "5.3 Cargo is stowed in order\n5.3.1 the last crate goes first.\n",
+            ["5.3", "5.3.1"],
+            id="first-child-decimal",
+        ),
+        pytest.param(
+            "4.1 Boats carry cargo.\n4.1.1 Heavy cargo rides low.\n4.2 the tide decides.\n",
+            ["4.1", "4.1.1", "4.2"],
+            id="next-sibling-of-an-ancestor",
+        ),
+        pytest.param(
+            "Harbour rules overview\n1.1 first rule applies here.\n1.2 Second rule.\n",
+            ["1.1", "1.2"],
+            id="after-an-unnumbered-first-line",
+        ),
+        pytest.param(
+            "1.1 Each boat carries a load worth a bonus of\n\n3.5 times its weight.\n3.6 Next.\n",
+            ["1.1", "3.5", "3.6"],
+            id="a-blank-line-ends-a-sentence-of-rules",
+        ),
+    ],
+)
+def test_a_numbered_line_is_a_rule_unless_it_continues_the_line_before(
+    text: str, expected: list[str], run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given rules where a line begins with a number that the list reaches next, follows a
+    # blank line or opens the text, though it reads like a decimal inside a sentence
+    # When the text is segmented in numbered mode
+    code, locators = _segment_locators_of(run_cli, tmp_path, text, "numbered")
+
+    # Then every numbered line is a span of its own
+    assert code == 0
+    assert locators == expected
+
+
+def test_a_numbered_line_that_is_a_rule_under_a_heading_is_not_merged(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a heading with numbered rules under it, the second reading like a wrapped decimal
+    text = "# Hand\n4.1 a limit of cards applies.\n4.2 the limit counts held cards.\n"
+
+    # When the text is segmented in headings mode
+    code, locators = _segment_locators_of(run_cli, tmp_path, text, "headings")
+
+    # Then both rules are spans beneath the heading
+    assert code == 0
+    assert locators == ["hand", "hand/4.1", "hand/4.2"]
+
+
+def test_a_wrapped_decimal_across_a_page_number_is_still_one_rule(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a rule that breaks across a page, with a page number between its two halves
+    text = (
+        "1.1 Each boat carries a load worth a bonus of\n- 3 -\n2.5 times its weight.\n1.2 Next.\n"
+    )
+
+    # When it is segmented
+    code, locators = _segment_locators_of(run_cli, tmp_path, text, "numbered")
+
+    # Then the page number does not separate them, so the decimal stays inside rule 1.1
+    assert code == 0
+    assert locators == ["1.1", "1.2"]
+
+
+@pytest.mark.parametrize("mode", ["numbered", "headings", "sentences"])
+def test_every_mode_reports_the_rule_text_check(
+    mode: str, run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a text with numbered rules under a heading
+    source = write_text(
+        tmp_path / "rules.txt", "# Hand\n4.1 A limit of cards applies.\n4.2 It counts.\n"
+    )
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": source})
+
+    # When it is segmented in a mode
+    code, document = _segment(run_cli, vault, source, mode)
+
+    # Then the rule-text check is among the checks and has passed: every rule is in a span
+    checks = {check["name"]: check for check in document["checks"]}  # type: ignore[attr-defined, union-attr]
+    assert code == 0
+    assert checks["rule-text-unspanned"] == {
+        "failures": [],
+        "name": "rule-text-unspanned",
+        "status": "passed",
+    }
+
+
+def test_headings_mode_numbers_a_heading_that_repeats(run_cli: CliRunner, tmp_path: Path) -> None:
+    # Given a text whose headings repeat a name, one of them beside a heading that already
+    # has the next suffix
+    text = (
+        "# Notes\n1.1 First note.\n# Boats\n2.1 A boat.\n# Notes\n3.1 Second note.\n"
+        "# Notes\n4.1 Third note.\n# Notes 2\n5.1 A heading that reads like a suffix.\n"
+    )
+
+    # When it is segmented in headings mode
+    code, locators = _segment_locators_of(run_cli, tmp_path, text, "headings")
+
+    # Then every heading has its own locator and the run passes its checks
+    headings = [locator for locator in locators if "/" not in locator]
+    assert code == 0
+    assert headings == ["notes", "boats", "notes-2", "notes-3", "notes-2-2"]
+    assert len(set(locators)) == len(locators)

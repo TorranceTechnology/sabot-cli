@@ -36,24 +36,29 @@ def run(args: argparse.Namespace) -> int:
     root: Path = args.vault
     try:
         rules = load_rules(root)
-        spans = _read_span_files(root, _requested_keys(rules.ruleset.sources, args.source))
+        keys, skipped = _requested_keys(rules.ruleset.sources, args.source)
+        spans = _read_span_files(root, keys)
     except (RulesetError, SourceError) as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
-    report = coverage(rules.load_notes(root), rules.ruleset, spans)
+    report = coverage(rules.load_notes(root), rules.ruleset, spans, skipped)
     _report(report, as_json=as_json)
     return int(ExitCode.OK if report.complete else ExitCode.FINDINGS)
 
 
-def _requested_keys(sources: Sequence[RulesetSource], requested: str | None) -> tuple[str, ...]:
+def _requested_keys(
+    sources: Sequence[RulesetSource], requested: str | None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The keys to measure and, separately, the superseded ones left out of the default run."""
     registered = tuple(source.key for source in sources)
     if requested is None:
         # An edition that a later one replaces is finished work: its citations moved on with
         # `migrate-edition`, so measuring it would keep the report failing for good.
         superseded = {source.supersedes for source in sources if source.supersedes}
-        return tuple(key for key in registered if key not in superseded)
+        measured = tuple(key for key in registered if key not in superseded)
+        return measured, tuple(key for key in registered if key in superseded)
     if requested not in registered:
         raise RulesetError("source-unknown", f"the source key {requested!r} is not registered")
-    return (requested,)
+    return (requested,), ()
 
 
 def _read_span_files(root: Path, keys: Sequence[str]) -> SpanIndex:
@@ -71,6 +76,7 @@ def _report(report: CoverageReport, *, as_json: bool) -> None:
                 "command": NAME,
                 "complete": report.complete,
                 "format": output.FORMAT_VERSION,
+                "skippedSuperseded": list(report.skipped_superseded),
                 "sources": [_source_json(source) for source in report.sources],
             }
         )
@@ -93,6 +99,7 @@ def _report(report: CoverageReport, *, as_json: bool) -> None:
         )
         notes = " ".join(f"{status}={count}" for status, count in source.citing_notes.items())
         text += f"citing notes {source.key} {notes or 'none'}\n"
+    text += "".join(f"skipped {key} (superseded)\n" for key in report.skipped_superseded)
     output.write_text(text)
 
 

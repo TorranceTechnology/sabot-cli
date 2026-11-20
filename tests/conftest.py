@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from sabot_cli.cli import main
-from sabot_cli.vault import _walk
+from sabot_cli.vault import walk
 
 FIXTURES = Path(__file__).parent / "fixtures" / "driftwood"
 FIXTURE_VAULT = FIXTURES / "vault"
@@ -60,7 +60,7 @@ def force_listing_order(monkeypatch: pytest.MonkeyPatch) -> ListingOrder:
         def listing(directory: Path) -> list[Path]:
             return sorted(directory.iterdir(), key=lambda entry: entry.name, reverse=reverse)
 
-        monkeypatch.setattr(_walk, "directory_entries", listing)
+        monkeypatch.setattr(walk, "directory_entries", listing)
 
     return force
 

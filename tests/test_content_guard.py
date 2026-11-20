@@ -144,14 +144,61 @@ def test_a_single_word_of_the_term_alone_is_allowed(scratch_repository: Path) ->
 
 
 def test_a_binary_file_is_not_scanned(scratch_repository: Path) -> None:
-    # Given a binary file whose bytes contain the term
-    (scratch_repository / "blob.bin").write_bytes(b"\0" + INVENTED_TERM.encode() + b"\0")
+    # Given a binary file, not valid UTF-8, whose bytes contain the term
+    (scratch_repository / "blob.bin").write_bytes(b"\xff\0" + INVENTED_TERM.encode() + b"\0\xfe")
 
     # When the guard scans the repository
     result = _scan(scratch_repository)
 
     # Then nothing is reported
     assert result.returncode == 0
+
+
+def test_utf8_text_holding_a_nul_byte_is_reported_and_still_scanned(
+    scratch_repository: Path,
+) -> None:
+    # Given a file that is valid UTF-8 apart from one NUL byte, beside a clean file with one
+    (scratch_repository / "stray.txt").write_bytes(b"nothing to see\0 here\n")
+    (scratch_repository / "planted.txt").write_bytes(f"{INVENTED_TERM}\0\n".encode())
+
+    # When the guard scans the repository
+    result = _scan(scratch_repository)
+
+    # Then both are reported for the NUL, and the planted term is found through it
+    assert result.returncode == 1
+    lines = result.stdout.splitlines()
+    assert "planted.txt: text that holds NUL bytes, which the guard cannot trust" in lines
+    assert "stray.txt: text that holds NUL bytes, which the guard cannot trust" in lines
+    assert any(line.startswith("planted.txt: matches guarded term") for line in lines)
+    assert not any(line.startswith("stray.txt: matches") for line in lines)
+
+
+def test_utf16_text_saved_without_a_byte_order_mark_is_not_skipped(
+    scratch_repository: Path,
+) -> None:
+    # Given a UTF-16 file with no byte order mark that holds the term
+    (scratch_repository / "wide.txt").write_bytes(f"{INVENTED_TERM}\n".encode("utf-16-le"))
+
+    # When the guard scans the repository
+    result = _scan(scratch_repository)
+
+    # Then the term is found
+    assert result.returncode == 1
+    assert any(
+        line.startswith("wide.txt: matches guarded term") for line in result.stdout.splitlines()
+    )
+
+
+@pytest.mark.parametrize("term", ["", "   ", "---", "\u00b7"])
+def test_a_term_with_no_letter_or_digit_is_refused_when_hashing(term: str) -> None:
+    # Given a term that normalises to nothing, which would stand for every file
+    # When it is hashed
+    result = _run_guard(f"--hash={term}")
+
+    # Then the guard refuses, prints no hash, and says why
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "at least one letter or digit" in result.stderr
 
 
 def test_the_repository_passes_its_own_guard() -> None:

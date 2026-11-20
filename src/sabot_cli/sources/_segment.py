@@ -94,8 +94,36 @@ def segment(
         items = _build_items(index, mode, numbering, skip_pages)
         skips = _boundaries.derive_skips(items, index)
     records = _records(source_key, items, index)
-    checks = merge(_boundary_checks([]) if mode == "boundaries" else (), run_self_checks(records))
+    checks = merge(
+        _boundary_checks([]) if mode == "boundaries" else (),
+        run_self_checks(records),
+        (_rule_text_check(index, items, mode, numbering, skip_pages),),
+    )
     return SegmentResult(source_key, mode, records, checks, _boundaries.emit_records(items, skips))
+
+
+def _rule_text_check(
+    index: LineIndex,
+    items: Sequence[Item],
+    mode: SegmentMode,
+    numbering: Numbering,
+    skip_pages: int,
+) -> CheckResult:
+    """Every line that begins with a rule number must have its text in some span.
+
+    Only the modes that read rule numbers are held to it; a boundaries file or a sentence split
+    does not claim to follow the numbering.
+    """
+    if mode not in ("numbered", "headings"):
+        return CheckResult("rule-text-unspanned")
+    missing = _builders.unspanned_rule_lines(
+        index,
+        items,
+        numbering,
+        skip_pages=skip_pages if mode == "numbered" else 0,
+        after_first_item=mode == "headings",
+    )
+    return CheckResult("rule-text-unspanned", missing)
 
 
 def _build_items(

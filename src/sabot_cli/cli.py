@@ -35,7 +35,7 @@ from sabot_cli.commands import (
 )
 from sabot_cli.commands._options import Subparsers
 from sabot_cli.exit_codes import ExitCode
-from sabot_cli.vault.transaction import pending_journals
+from sabot_cli.vault.transaction import WRITE_IN_PROGRESS, pending_journals, write_in_progress
 
 
 class CommandModule(Protocol):
@@ -48,7 +48,7 @@ class CommandModule(Protocol):
     def run(self, args: argparse.Namespace) -> int: ...
 
 
-_EXEMPT_FROM_UNFINISHED_WRITE = frozenset({"lint", "recover"})
+_EXEMPT_FROM_UNFINISHED_WRITE = frozenset({"lint"})
 
 _COMMANDS: tuple[CommandModule, ...] = (
     init,
@@ -94,23 +94,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         # argparse exits for --help and usage errors; tests and callers want a return value.
         return _exit_status(stop.code)
     name = str(args.command)
-    if refusal := _unfinished_write(name, args):
-        return output.refuse(
-            name, "transaction-incomplete", refusal, as_json=bool(getattr(args, "json", False))
-        )
+    if refusal := _vault_refusal(name, args):
+        return output.refuse(name, *refusal, as_json=bool(getattr(args, "json", False)))
     return {command.NAME: command for command in _COMMANDS}[name].run(args)
 
 
-def _unfinished_write(name: str, args: argparse.Namespace) -> str | None:
-    """The refusal message when the vault a command reads or writes holds an unfinished write.
+def _vault_refusal(name: str, args: argparse.Namespace) -> tuple[str, str] | None:
+    """The (code, message) a command is refused with when its vault is being or was written.
 
-    `lint` reports the condition as a finding and `recover` is the way out, so neither refuses.
+    A write in progress refuses every command but `recover`, which judges the lock itself. An
+    unfinished write refuses every command but `lint`, which reports it as a finding, and
+    `recover`, which is the way out.
     """
-    if name in _EXEMPT_FROM_UNFINISHED_WRITE:
+    if name == "recover":
         return None
     root = getattr(args, "directory", None) or getattr(args, "vault", None)
     if not isinstance(root, Path):
         return None
-    if journals := pending_journals(root):
-        return f"an earlier write was not finished ({journals[0]}); run sabot recover"
+    if write_in_progress(root):
+        return "vault-locked", WRITE_IN_PROGRESS
+    if name not in _EXEMPT_FROM_UNFINISHED_WRITE and (journals := pending_journals(root)):
+        return (
+            "transaction-incomplete",
+            f"an earlier write was not finished ({journals[0]}); run sabot recover",
+        )
     return None

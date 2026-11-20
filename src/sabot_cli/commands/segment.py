@@ -21,6 +21,7 @@ from sabot_cli.sources import (
     span_file_relative,
 )
 from sabot_cli.vault import TextFileError, decode_text, encode_text
+from sabot_cli.vault.paths import relative_within
 from sabot_cli.vault.transaction import Transaction, TransactionError, atomic_write
 
 NAME = "segment"
@@ -50,7 +51,7 @@ def register(subparsers: Subparsers) -> None:
         "--numbering",
         choices=("dotted", "dotted-letter"),
         default="dotted",
-        help="numbered-mode style",
+        help="numbered-mode style (default: dotted)",
     )
     parser.add_argument(
         "--skip-pages",
@@ -79,6 +80,14 @@ def run(args: argparse.Namespace) -> int:
 def _segment(args: argparse.Namespace, transaction: Transaction, *, as_json: bool) -> int:
     vault: Path = args.vault
     key, mode = str(args.source), str(args.mode)
+    emit: Path | None = args.emit_boundaries
+    if emit is not None and relative_within(emit, vault) is not None:
+        return output.refuse(
+            NAME,
+            "emit-inside-vault",
+            "--emit-boundaries names a path inside the vault; write it outside",
+            as_json=as_json,
+        )
     try:
         load_rules(vault)
         check_key(key)
@@ -102,15 +111,15 @@ def _segment(args: argparse.Namespace, transaction: Transaction, *, as_json: boo
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
     except SourceError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
+    if updated is not None:
+        _plan_writes(transaction, key, mode, result, updated)
+        transaction.commit()
     try:
-        emitted = _emit(args.emit_boundaries, result)
+        emitted = _emit(emit, result)
     except OSError as error:
         return output.refuse(
             NAME, "write-failed", f"a file could not be written: {error.strerror}", as_json=as_json
         )
-    if updated is not None:
-        _plan_writes(transaction, key, mode, result, updated)
-        transaction.commit()
     _report(key, mode, result, emitted=emitted, as_json=as_json)
     return int(ExitCode.OK if result.ok else ExitCode.FINDINGS)
 
@@ -139,8 +148,12 @@ def _plan_writes(
 ) -> None:
     transaction.put(span_file_relative(key), result.span_file_text().encode("utf-8"))
     boundaries = result.boundaries_text()
+    boundaries_file = span_file_relative(key, boundaries=True)
     if mode == "boundaries" and boundaries is not None:
-        transaction.put(span_file_relative(key, boundaries=True), boundaries.encode("utf-8"))
+        transaction.put(boundaries_file, boundaries.encode("utf-8"))
+    else:
+        # A boundaries file left by an earlier run would describe spans that no longer exist.
+        transaction.delete(boundaries_file)
     transaction.put(_source_note.note_relative(key), note)
 
 

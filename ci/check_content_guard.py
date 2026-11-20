@@ -16,8 +16,12 @@ long is ever compared.
 A file is also read with a camel-case word split into its parts (`FooBar` as `foo bar`) and
 with a trailing possessive (`'s`, straight or curly) dropped, so those spellings of a term still
 match. A file with a UTF-16 or UTF-32 byte order mark is decoded as such. A file that holds no
-NUL byte and is not UTF-8 is reported as unreadable by the guard, which fails the run; a file
-with a NUL byte and no byte order mark is treated as binary and not scanned.
+NUL byte and is not UTF-8 is reported as unreadable by the guard, which fails the run. A file
+with a NUL byte and no byte order mark is binary when it is not valid UTF-8, and is not
+scanned; when it is valid UTF-8 it is text holding NUL bytes (a UTF-16 file saved without its
+mark looks like this), which the guard scans with the NUL bytes removed and also reports, since
+a person must decide whether the file is text. An empty term, one with no letters or digits, is
+refused when hashing, because it would stand for every file.
 """
 
 import argparse
@@ -109,8 +113,20 @@ class _Unreadable(Exception):
     """A file that looks like text but cannot be decoded, so the guard cannot judge it."""
 
 
+class _HoldsNul(Exception):
+    """Text that holds NUL bytes; carries what could be read of it with them removed."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.text = text
+
+
 def _read_text(path: Path) -> str | None:
-    """The text of a file; None for a binary file; `_Unreadable` for undecodable text."""
+    """The text of a file; None for a binary file.
+
+    Raises `_Unreadable` for undecodable text and `_HoldsNul` for valid UTF-8 that holds NUL
+    bytes.
+    """
     try:
         data = path.read_bytes()
     except OSError:
@@ -121,12 +137,15 @@ def _read_text(path: Path) -> str | None:
                 return data.decode(encoding)
             except UnicodeDecodeError as error:
                 raise _Unreadable from error
-    if b"\0" in data:
-        return None
     try:
-        return data.decode("utf-8")
+        text = data.decode("utf-8")
     except UnicodeDecodeError as error:
+        if b"\0" in data:
+            return None
         raise _Unreadable from error
+    if "\0" in text:
+        raise _HoldsNul(text.replace("\0", ""))
+    return text
 
 
 def scan(root: Path, guarded: frozenset[str]) -> list[str]:
@@ -142,6 +161,9 @@ def scan(root: Path, guarded: frozenset[str]) -> list[str]:
         except _Unreadable:
             findings.append(f"{name}: not valid text the guard can read")
             text = None
+        except _HoldsNul as nul:
+            findings.append(f"{name}: text that holds NUL bytes, which the guard cannot trust")
+            text = nul.text
         if text is not None:
             hits = sorted(set(hits) | set(matching_hashes(text, guarded)))
         findings.extend(f"{name}: matches guarded term {digest[:12]}" for digest in hits)
@@ -162,6 +184,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.hash is not None:
         length = len(normalise_words(args.hash))
+        if length == 0:
+            sys.stderr.write("a term needs at least one letter or digit; this one has none\n")
+            return 2
         if length > MAX_TERM_WORDS:
             sys.stderr.write(
                 f"a term is at most {MAX_TERM_WORDS} words, since longer terms are never "

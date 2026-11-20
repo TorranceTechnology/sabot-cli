@@ -30,7 +30,11 @@ def register(subparsers: Subparsers) -> None:
         "--source-text", required=True, type=Path, metavar="PATH", help="extracted source text"
     )
     parser.add_argument(
-        "--fail-at", type=int, default=10, metavar="WORDS", help="run length that fails"
+        "--fail-at",
+        type=int,
+        default=10,
+        metavar="WORDS",
+        help="run length that fails (default: 10)",
     )
     parser.add_argument(
         "--warn-at",
@@ -55,6 +59,11 @@ def run(args: argparse.Namespace) -> int:
                 "the source text must be kept outside the vault, which may be shared",
             )
         source = read_text_file(source_path)
+        if not source.split():
+            raise SourceError(
+                "source-text-empty",
+                "the source text has no words, so nothing could overlap with it",
+            )
         loaded = rules.load_notes(vault)
         bodies = _select_bodies(
             vault, {n.path.as_posix(): n.body for n in loaded.notes.values()}, args.paths

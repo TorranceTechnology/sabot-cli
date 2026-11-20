@@ -3,6 +3,7 @@
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 
 from sabot_cli.sources._items import Item
@@ -19,21 +20,63 @@ _HEADING = re.compile(r"^(#{1,6})\s+(\S.*?)\s*#*\s*$")
 _SENTENCE_END = ".!?:;)\"'\u201d\u2019"
 
 
-def _wraps_onto(previous: str | None, rest: str) -> bool:
+_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)([a-z]?)$")
+
+
+def _expected_numbers(locator: str) -> set[str]:
+    """The numbers a list of rules reaches next after `locator`.
+
+    Its first child (`4.2` then `4.2.1` or `4.2a`), its next sibling (`4.2` then `4.3`,
+    `4.2a` then `4.2b`) and the next sibling of each ancestor (`4.2c` then `4.3`, then `5`).
+    A number that is none of these may be a decimal inside a sentence that a line broke before.
+    """
+    match = _NUMBER.match(locator.rsplit("/", 1)[-1])
+    if match is None:
+        return set()
+    base, letter = match.groups()
+    parts = base.split(".")
+    expected: set[str] = set()
+    if letter:
+        if letter < "z":
+            expected.add(f"{base}{chr(ord(letter) + 1)}")
+    else:
+        expected |= {f"{base}.1", f"{base}a"}
+    for depth in range(len(parts), 0, -1):
+        expected.add(".".join([*parts[: depth - 1], str(int(parts[depth - 1]) + 1)]))
+    return expected
+
+
+def _wraps_onto(
+    previous: str | None, rest: str, *, number: str, open_locator: str | None, separated: bool
+) -> bool:
     """Whether a line that begins with a rule number is a wrapped continuation instead.
 
     A decimal that a long line happens to break before (`... a bonus of` / `2.5 times ...`)
-    reads as a rule number. It is a continuation when the line before it stops short of the end
-    of a sentence and the text after the number starts in lower case, which a rule does not.
+    reads as a rule number. It is a continuation only when all of these hold: a rule is open to
+    continue; the line follows the one before it with no blank line between; its number is not
+    the one the list reaches next (see `_expected_numbers`); the line before stops short of the
+    end of a sentence; and the text after the number starts in lower case, which a rule does not.
     """
-    if not previous:
+    if separated or not previous or open_locator is None:
+        return False
+    if number in _expected_numbers(open_locator):
         return False
     return previous[-1] not in _SENTENCE_END and rest[:1].islower()
 
 
-def _content_lines(index: LineIndex) -> list[Line]:
-    """Lines that carry prose: neither blank nor page furniture."""
-    return [line for line in index.lines if line.text and not is_page_furniture(line.text)]
+def _prose_lines(index: LineIndex) -> Iterator[tuple[Line, bool]]:
+    """Lines that carry prose, each with whether a blank line (or the start) comes before it.
+
+    Page furniture is skipped without counting as a separator, since a page number can sit
+    between the halves of a wrapped line; a blank line does count.
+    """
+    separated = True
+    for line in index.lines:
+        if not line.text:
+            separated = True
+        elif not is_page_furniture(line.text):
+            yield line, separated
+            separated = False
 
 
 def _nearest_numbered_parent(locator: str, known: set[str]) -> str | None:
@@ -72,11 +115,17 @@ def numbered(index: LineIndex, numbering: Numbering, skip_pages: int) -> list[It
     pattern = _NUMBER_START[numbering]
     opened: list[_Open] = []
     previous: str | None = None
-    for line in _content_lines(index):
+    for line, separated in _prose_lines(index):
         if line.page <= skip_pages:
             continue
         match = pattern.match(line.text)
-        wrapped = match is not None and _wraps_onto(previous, line.text[match.end() :])
+        wrapped = match is not None and _wraps_onto(
+            previous,
+            line.text[match.end() :],
+            number=match.group(1).rstrip("."),
+            open_locator=opened[-1].locator if opened else None,
+            separated=separated,
+        )
         previous = line.text
         if match is not None and not wrapped:
             opened.append(
@@ -89,6 +138,32 @@ def numbered(index: LineIndex, numbering: Numbering, skip_pages: int) -> list[It
         replace(item.freeze(), parent=_nearest_numbered_parent(item.locator, known))
         for item in opened
     ]
+
+
+def unspanned_rule_lines(
+    index: LineIndex,
+    items: Sequence[Item],
+    numbering: Numbering,
+    *,
+    skip_pages: int,
+    after_first_item: bool,
+) -> tuple[str, ...]:
+    """The rule numbers of lines that begin with one but whose text lies in no item.
+
+    A rule that a segmentation dropped is otherwise silent: nothing in the span file would say
+    it was ever there. Lines on skipped pages are not counted, and with `after_first_item` neither
+    are lines before the first item, which a mode that starts at a heading leaves out by design.
+    """
+    pattern = _NUMBER_START[numbering]
+    floor = min((item.start for item in items), default=0) if after_first_item else 0
+    missing: set[str] = set()
+    for line, _ in _prose_lines(index):
+        match = pattern.match(line.text)
+        if match is None or line.page <= skip_pages or line.text_offset < floor:
+            continue
+        if not any(item.start <= line.text_offset < item.end for item in items):
+            missing.add(match.group(1).rstrip("."))
+    return tuple(sorted(missing))
 
 
 def slug(title: str) -> str:
@@ -105,7 +180,8 @@ def headings(index: LineIndex, numbering: Numbering) -> list[Item]:
     stack: list[tuple[int, _Open]] = []
     current: _Open | None = None
     previous: str | None = None
-    for line in _content_lines(index):
+    used: set[str] = set()
+    for line, separated in _prose_lines(index):
         heading = _HEADING.match(line.text)
         if heading is not None:
             level = len(heading.group(1))
@@ -113,7 +189,14 @@ def headings(index: LineIndex, numbering: Numbering) -> list[Item]:
                 stack.pop()
             parent = stack[-1][1].locator if stack else None
             name = slug(heading.group(2))
-            locator = f"{parent}/{name}" if parent else name
+            base = f"{parent}/{name}" if parent else name
+            # A heading repeated under the same parent keeps its first locator; later ones
+            # count up (`notes`, `notes-2`), skipping a locator another heading already has.
+            locator, occurrence = base, 1
+            while locator in used:
+                occurrence += 1
+                locator = f"{base}-{occurrence}"
+            used.add(locator)
             title_start = line.text_offset + heading.start(2)
             current = _Open(
                 locator, parent, line.page, title_start, line.text_offset + heading.end(2), True
@@ -125,7 +208,13 @@ def headings(index: LineIndex, numbering: Numbering) -> list[Item]:
         if not stack:
             continue
         number = pattern.match(line.text)
-        if number is not None and _wraps_onto(previous, line.text[number.end() :]):
+        if number is not None and _wraps_onto(
+            previous,
+            line.text[number.end() :],
+            number=number.group(1).rstrip("."),
+            open_locator=current.locator if current is not None else None,
+            separated=separated,
+        ):
             number = None
         previous = line.text
         if number is not None:

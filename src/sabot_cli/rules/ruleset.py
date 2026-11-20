@@ -146,6 +146,23 @@ def load_ruleset(root: Path) -> Ruleset:
     return _parse(loaded)
 
 
+def _refuse_supersedes_cycles(sources: tuple[RulesetSource, ...]) -> None:
+    """Refuse sources that supersede each other round a loop, a source itself included.
+
+    The newest edition of a chain is the one measured, and a loop has none.
+    """
+    successor = {source.key: source.supersedes for source in sources if source.supersedes}
+    for start in successor:
+        seen = {start}
+        current = successor.get(start)
+        while current is not None:
+            if current in seen:
+                loop = ", ".join(sorted(seen))
+                raise _invalid("sources", f"supersedes forms a loop through: {loop}")
+            seen.add(current)
+            current = successor.get(current)
+
+
 def _parse(loaded: object) -> Ruleset:
     top = _mapping(loaded, RULESET_FILE, _TOP_LEVEL_KEYS)
     ruleset_id = top.get("ruleset")
@@ -158,6 +175,7 @@ def _parse(loaded: object) -> Ruleset:
         _parse_source(item, index)
         for index, item in enumerate(_list(top.get("sources"), "sources"))
     )
+    _refuse_supersedes_cycles(sources)
     scope_raw = _mapping(top.get("scope"), "scope")
     scope = {key: _text_list(value, f"scope.{key}") for key, value in scope_raw.items()}
     return Ruleset(ruleset_id, version, sources, scope, _parse_extensions(top.get("extensions")))
@@ -280,11 +298,25 @@ _ITEM_INDENT = re.compile(r"^(?P<indent>\s*)- ")
 _PLAIN_SCALAR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
+# Words that readers of YAML 1.1 type as booleans or null. This repository's own loader keeps
+# them as text, which another tool reading the same file would not.
+_TYPED_WORDS = frozenset({"y", "n", "yes", "no", "on", "off", "true", "false", "null"})
+
+
 def _scalar(value: str) -> str:
-    """The value as YAML text that reads back as the same string: plain when it safely can."""
-    if _PLAIN_SCALAR.match(value) and load_yaml(value) == value:
-        return value
-    return json.dumps(value, ensure_ascii=False)
+    """The value as YAML text that no YAML reader types as anything but this string.
+
+    Plain when that is certain: it starts with a letter, is not a word some reader types, and
+    the stock loader reads it back as the same text. Anything starting with a digit is quoted,
+    which covers numbers, hexadecimal, exponents and dates under every YAML version.
+    """
+    plain = (
+        _PLAIN_SCALAR.match(value)
+        and not value[0].isdigit()
+        and value.lower() not in _TYPED_WORDS
+        and yaml.safe_load(value) == value
+    )
+    return value if plain else json.dumps(value, ensure_ascii=False)
 
 
 def _block_end(lines: list[str], start: int) -> int:

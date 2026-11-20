@@ -7,6 +7,8 @@ import pytest
 
 from conftest import CliResult, CliRunner, ListingOrder
 from invocations import COMMAND_NAMES, invocation
+from sabot_cli.output import canonical_json
+from sabot_cli.vault import load_vault
 from source_vaults import write_text
 from support.plant import plant
 
@@ -94,6 +96,87 @@ def test_lint_findings_keep_one_order_whatever_the_listing_order(
     assert isinstance(findings, list)
     assert len(findings) >= 3
     assert first.stdout == second.stdout
+
+
+def test_lint_findings_are_sorted_by_path_class_and_message(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a vault with many findings on different notes, enough that an arbitrary order is
+    # very unlikely to be the sorted one
+    for defect in (
+        "orphan",
+        "conflict-without-question",
+        "type-requirement",
+        "link-dangling",
+        "body-link",
+        "quotation-long",
+        "id-duplicate",
+    ):
+        plant(driftwood_vault, defect)
+    for folder in ("clauses", "terms", "rulings", "model"):
+        write_text(driftwood_vault / folder / "unreadable.md", "---\nid: [\n---\n")
+
+    # When it is linted
+    findings = run_cli("lint", "--vault", str(driftwood_vault), "--json").json()["findings"]
+
+    # Then the findings come out sorted by path, class and message, whatever order the checks
+    # and the file system produced them in
+    keys = [(f["path"], f["class"], f["message"]) for f in findings]  # type: ignore[index, union-attr]
+    assert len(keys) >= 8
+    assert keys == sorted(keys)
+
+
+def test_the_vault_reader_lists_notes_in_path_order_whatever_the_listing_order(
+    force_listing_order: ListingOrder, driftwood_vault: Path
+) -> None:
+    # Given a vault read with its directories listed in name order and in reverse
+    force_listing_order(False)
+    forward = [
+        note.path.as_posix() for note in load_vault(driftwood_vault, frozenset()).notes.values()
+    ]
+    force_listing_order(True)
+    backward = [
+        note.path.as_posix() for note in load_vault(driftwood_vault, frozenset()).notes.values()
+    ]
+
+    # When the notes are listed
+    # Then both listings are the same, in path order
+    assert forward == backward
+    assert forward == sorted(forward)
+    assert len(forward) > 10
+
+
+def _every_object_lists_its_keys_in_order(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    keys = [key for key, _ in pairs]
+    assert keys == sorted(keys), f"keys out of order: {keys}"
+    return dict(pairs)
+
+
+@pytest.mark.parametrize("name", COMMAND_NAMES)
+def test_every_json_document_writes_its_keys_in_sorted_order(
+    name: str, run_cli: CliRunner, driftwood_vault: Path, tmp_path: Path
+) -> None:
+    # Given a command run with --json
+    result = _run_json(run_cli, name, driftwood_vault, tmp_path)
+    assert result.stdout != ""
+
+    # When its document is read with the order its keys were written in
+    # Then every object, nested ones included, lists its keys sorted
+    json.loads(result.stdout, object_pairs_hook=_every_object_lists_its_keys_in_order)
+
+
+def test_canonical_json_sorts_nested_keys() -> None:
+    # Given a document whose keys are given out of order, at two depths
+    document = {"b": 1, "a": {"d": [{"z": 1, "y": 2}], "c": 2}}
+
+    # When it is written
+    text = canonical_json(document)
+
+    # Then the keys are sorted at every depth and the text ends in one newline
+    assert text.index('"a"') < text.index('"b"')
+    assert text.index('"c"') < text.index('"d"')
+    assert text.index('"y"') < text.index('"z"')
+    assert text.endswith("}\n")
 
 
 @pytest.mark.parametrize("name", COMMAND_NAMES)

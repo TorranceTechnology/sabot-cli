@@ -15,6 +15,7 @@ SELF_CHECKS: tuple[str, ...] = (
     "no-spans",
     "non-monotone",
     "page-decreasing",
+    "rule-text-unspanned",
 )
 _NUMBER_KEY = re.compile(r"^(\d+(?:\.\d+)*)([a-z]?)$")
 

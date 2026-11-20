@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from conftest import CliResult, CliRunner
 from support.plant import register_second_edition
 
@@ -266,6 +268,45 @@ def test_a_superseded_source_is_measured_only_when_named(
     assert sorted(_sources(everything)) == ["dw2"]
     assert sorted(_sources(named)) == ["dw1"]
     assert named.returncode == 0
+
+
+def test_the_sources_left_out_for_being_superseded_are_listed(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given edition two registered as the successor of edition one
+    register_second_edition(driftwood_vault)
+
+    # When coverage runs for every source, as JSON and as text, and for the old edition by name
+    everything = _coverage(run_cli, driftwood_vault)
+    text = run_cli("coverage", "--vault", str(driftwood_vault))
+    named = _coverage(run_cli, driftwood_vault, "--source", "dw1")
+
+    # Then the report names what it left out, and naming the edition leaves nothing out
+    assert everything.json()["skippedSuperseded"] == ["dw1"]
+    assert "skipped dw1 (superseded)\n" in text.stdout
+    assert named.json()["skippedSuperseded"] == []
+    named_text = run_cli("coverage", "--vault", str(driftwood_vault), "--source", "dw1")
+    assert "skipped" not in named_text.stdout
+
+
+@pytest.mark.parametrize("loop", ["itself", "each other"])
+def test_sources_that_supersede_each_other_in_a_loop_are_refused(
+    loop: str, run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given edition two registered after edition one, and a loop planted in the ruleset
+    register_second_edition(driftwood_vault)
+    target = "dw1" if loop == "itself" else "dw2"
+    _rewrite_ruleset(
+        driftwood_vault, "    note: src.dw1\n", f"    note: src.dw1\n    supersedes: {target}\n"
+    )
+
+    # When coverage runs
+    result = _coverage(run_cli, driftwood_vault)
+
+    # Then it refuses the ruleset instead of reporting that nothing needs covering
+    assert result.returncode == 3
+    assert result.json()["error"]["code"] == "ruleset-invalid"  # type: ignore[index]
+    assert "loop" in result.stdout
 
 
 def test_a_chain_of_editions_is_measured_at_its_last_link(

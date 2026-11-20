@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from conftest import CliResult, CliRunner
 from support.plant import plant
 
@@ -267,3 +269,66 @@ def test_list_classes_prints_a_table_for_people(run_cli: CliRunner, tmp_path: Pa
     lines = {line.split()[0]: line for line in result.stdout.splitlines()[1:]}
     assert lines["orphan"].endswith("warning (error under --strict)")
     assert lines["link-dangling"].endswith("error")
+
+
+def _append_to_host_body(vault: Path, text: str) -> None:
+    host = vault / "clauses" / "cl.setup.md"
+    host.write_bytes(host.read_bytes() + f"\n{text}\n".encode())
+
+
+_LEFT_SINGLE, _RIGHT_SINGLE = chr(0x2018), chr(0x2019)
+_LEFT_DOUBLE, _RIGHT_DOUBLE = chr(0x201C), chr(0x201D)
+_LONG_WORDS = "the harbour master keeps the tide tables and reads them aloud each dawn"
+
+
+@pytest.mark.parametrize(
+    ("text", "linked"),
+    [
+        pytest.param("See [[ch.capacity]] for the number.", True, id="plain-prose"),
+        pytest.param("Write it as `[[ch.capacity]]` in a note.", False, id="inline-code"),
+        pytest.param("```\n[[ch.capacity]]\n```", False, id="backtick-fence"),
+        pytest.param("~~~md\nSee [[ch.capacity]]\n~~~", False, id="tilde-fence"),
+        pytest.param("```\ncode\n```\nthen [[ch.capacity]] after it", True, id="after-a-fence"),
+    ],
+)
+def test_a_wikilink_in_code_is_not_a_body_link(
+    text: str, linked: bool, run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a body with a wikilink written in prose, inline code or a fenced block
+    _append_to_host_body(driftwood_vault, text)
+
+    # When it is linted
+    findings = _findings(_lint(run_cli, driftwood_vault))
+
+    # Then only a link in prose is reported
+    assert ("body-link" in {f["class"] for f in findings}) is linked
+
+
+@pytest.mark.parametrize(
+    ("text", "reported"),
+    [
+        pytest.param(f"{_LEFT_SINGLE}{_LONG_WORDS}{_RIGHT_SINGLE}", True, id="curly-single-quotes"),
+        pytest.param(
+            f"{_LEFT_SINGLE}{_LONG_WORDS[:20]}{_RIGHT_SINGLE}",
+            False,
+            id="short-curly-single-quotes",
+        ),
+        pytest.param(f"> {_LONG_WORDS}", True, id="block-quote-one-line"),
+        pytest.param(f"> {_LONG_WORDS[:36]}\n> {_LONG_WORDS[37:]}", True, id="block-quote-wrapped"),
+        pytest.param("> a short quoted line", False, id="short-block-quote"),
+        pytest.param(f'"{_LONG_WORDS}"', True, id="straight-double-quotes"),
+        pytest.param(f"{_LEFT_DOUBLE}{_LONG_WORDS}{_RIGHT_DOUBLE}", True, id="curly-double-quotes"),
+    ],
+)
+def test_a_long_quotation_is_found_in_every_quoting_form(
+    text: str, reported: bool, run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a body that quotes a run of words, or a short one, in one of the forms
+    _append_to_host_body(driftwood_vault, text)
+
+    # When it is linted
+    result = _lint(run_cli, driftwood_vault)
+
+    # Then a run of sixty or more characters is reported once, and a short one is not
+    classes = [f["class"] for f in _findings(result)]
+    assert classes.count("quotation-long") == (1 if reported else 0)

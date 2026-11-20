@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from sabot_cli.rules._checks._context import LintContext, is_present
 from sabot_cli.rules._checks._model import Report
 from sabot_cli.vault import ProblemKind
-from sabot_cli.vault.paths import reserved_device_name
+from sabot_cli.vault.paths import reserved_device_name, windows_unusable_entries
 
 
 def _check_frontmatter_invalid(ctx: LintContext) -> Iterator[Report]:
@@ -49,12 +49,14 @@ def _check_id_reserved_name(ctx: LintContext) -> Iterator[Report]:
                 f"the id {declared!r} starts with a name Windows reserves for a device, "
                 "so a note file named for it cannot be checked out there",
             )
-        if reserved_device_name(note.path.name):
-            yield ctx.report(
-                note,
-                f"the file name {note.path.name} starts with a name Windows reserves for a "
-                "device, so it cannot be checked out there",
-            )
+    notes_by_path = {note.path.as_posix(): note for note in ctx.notes}
+    for relative, name, is_directory, reason in windows_unusable_entries(ctx.vault.root):
+        kind = "directory" if is_directory else "file"
+        message = f"the {kind} name {name} {reason}, so it cannot be checked out there"
+        if (owner := notes_by_path.get(relative)) is not None:
+            yield ctx.report(owner, message)
+        else:
+            yield Report(relative, None, message)
 
 
 def _check_id_file_mismatch(ctx: LintContext) -> Iterator[Report]:

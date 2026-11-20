@@ -182,7 +182,12 @@ def test_overlap_refuses_unusable_input(
     bad = tmp_path / "bad.txt"
     bad.write_bytes(b"\xff\xfe")
     vault = str(driftwood_vault)
+    empty = tmp_path / "empty.txt"
+    empty.write_bytes(b"")
+    blank = tmp_path / "blank.txt"
+    blank.write_bytes(b" \n\f\n")
     cases: dict[str, tuple[str, ...]] = {
+        "source-text-empty": ("--source-text", str(empty), "--vault", vault),
         "source-text-inside-vault": ("--source-text", str(inside), "--vault", vault),
         "file-unreadable": ("--source-text", str(tmp_path / "none.txt"), "--vault", vault),
         "text-undecodable": ("--source-text", str(bad), "--vault", vault),
@@ -192,6 +197,8 @@ def test_overlap_refuses_unusable_input(
         "not-a-vault": ("--source-text", str(RULES_E1), "--vault", str(tmp_path)),
     }
 
+    blank_result = run_cli("overlap", "--source-text", str(blank), "--vault", vault, "--json")
+    assert error_code(blank_result) == "source-text-empty"
     for code, arguments in cases.items():
         # When the command runs
         result = run_cli("overlap", *arguments, "--json")

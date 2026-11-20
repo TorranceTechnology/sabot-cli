@@ -89,10 +89,17 @@ def _migrate(args: argparse.Namespace, transaction: Transaction | None, *, as_js
                 edits[note.path.as_posix()] = encode_text(after, like=raw)
     except RulesetError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
-    except (SourceError, OSError, TextFileError) as error:
-        code = error.code if isinstance(error, SourceError) else "note-unreadable"
-        message = error.message if isinstance(error, SourceError) else "a note cannot be read"
-        return output.refuse(NAME, code, message, as_json=as_json)
+    except SourceError as error:
+        return output.refuse(NAME, error.code, error.message, as_json=as_json)
+    except (OSError, TextFileError):
+        # The vault reader read this note moments ago, so only another program changing it
+        # since can bring us here.
+        return output.refuse(
+            NAME,
+            "migration-rewrite-invalid",
+            "a note changed or became unreadable while it was being migrated",
+            as_json=as_json,
+        )
     if transaction is not None:
         for relative, data in edits.items():
             transaction.put(relative, data)

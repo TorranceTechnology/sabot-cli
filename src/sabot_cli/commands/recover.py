@@ -18,9 +18,16 @@ def register(subparsers: Subparsers) -> None:
         help="roll back a write that was killed, and clear what it left",
         description=(
             "Rolls back every unfinished write to its state before the run, removes staged "
-            "files and clears the write lock. It never completes a write. Run it only when no "
-            "other sabot process is writing the vault."
+            "files and clears the write lock. It never completes a write. It refuses while a "
+            "sabot process of this host is writing the vault, and while the lock was left by "
+            "another host or cannot be read; --force overrides both once you know no write is "
+            "running."
         ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="clear a lock held by a running process or left by another host (default: refuse)",
     )
     add_vault_option(parser)
     add_json_option(parser)
@@ -31,7 +38,7 @@ def run(args: argparse.Namespace) -> int:
     as_json = bool(args.json)
     root: Path = args.vault
     try:
-        recovery = recover(root)
+        recovery = recover(root, force=bool(args.force))
     except TransactionError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
     if as_json:

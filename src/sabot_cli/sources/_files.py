@@ -5,8 +5,13 @@ from pathlib import Path
 
 from sabot_cli.sources._boundaries import own_ranges
 from sabot_cli.sources._records import SpanIndex, parse_spans
-from sabot_cli.sources._types import SourceError, check_key, span_file_relative
-from sabot_cli.vault import TextFileError, read_text
+from sabot_cli.sources._types import (
+    SourceError,
+    check_key,
+    source_note_relative,
+    span_file_relative,
+)
+from sabot_cli.vault import FrontMatterError, TextFileError, parse_front_matter, read_text
 
 
 def read_text_file(path: Path) -> str:
@@ -38,10 +43,26 @@ def read_span_file(vault: Path, key: str) -> SpanIndex:
 def read_edition_ranges(vault: Path, key: str) -> Mapping[str, tuple[int, int]] | None:
     """The text range each span of an edition owns, from its boundaries file in the vault.
 
-    Only an edition segmented in `boundaries` mode has one (`spans/<key>.boundaries.jsonl`);
-    for any other the result is None and a span is read as running to the next span's start.
+    Only an edition whose source note says `segmenter: boundaries` has ranges, in
+    `spans/<key>.boundaries.jsonl`; for any other the result is None and a span is read as
+    running to the next span's start, whatever file is lying about.
     """
-    path = vault / span_file_relative(check_key(key), boundaries=True)
+    key = check_key(key)
+    if _segmenter(vault, key) != "boundaries":
+        return None
+    path = vault / span_file_relative(key, boundaries=True)
     if not path.is_file():
         return None
     return own_ranges(read_text_file(path))
+
+
+def _segmenter(vault: Path, key: str) -> object:
+    """The `segmenter` a source note records, or None when there is no readable note."""
+    path = vault / source_note_relative(key)
+    if not path.is_file():
+        return None
+    try:
+        properties, _ = parse_front_matter(read_text(path))
+    except (TextFileError, FrontMatterError):
+        return None
+    return properties.get("segmenter")

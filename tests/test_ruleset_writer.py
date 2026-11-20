@@ -90,6 +90,34 @@ def test_ruleset_with_source_quotes_a_key_that_yaml_would_read_as_a_number(
     assert [source.key for source in load_ruleset(driftwood_vault).sources] == ["dw1", "1.5e5"]
 
 
+@pytest.mark.parametrize("key", ["yes", "on", "off", "no", "y", "n", "0x1f", "2024-01-01", "1e3"])
+def test_ruleset_with_source_quotes_a_key_that_another_yaml_reader_would_type(
+    key: str, driftwood_vault: Path
+) -> None:
+    # Given a key that this repository's loader keeps as text but other YAML readers read as a
+    # boolean, a number or a date
+    # When it is registered
+    _register(driftwood_vault, key, f"src.{key}")
+
+    # Then the file quotes it, so every reader sees the text that was given
+    text = (driftwood_vault / RULESET).read_text(encoding="utf-8")
+    assert f'key: "{key}"\n' in text
+    assert f'note: "src.{key}"' not in text  # a note id starts with a letter and has a dot
+    assert [source.key for source in load_ruleset(driftwood_vault).sources] == ["dw1", key]
+
+
+@pytest.mark.parametrize("key", ["dw3", "src.dw3", "yes-no", "onward", "noon"])
+def test_ruleset_with_source_leaves_an_ordinary_key_unquoted(
+    key: str, driftwood_vault: Path
+) -> None:
+    # Given a key no YAML reader types
+    # When it is registered
+    _register(driftwood_vault, key, "src.dw3")
+
+    # Then it is written plain
+    assert f"key: {key}\n" in (driftwood_vault / RULESET).read_text(encoding="utf-8")
+
+
 def test_ingest_of_a_number_like_key_leaves_a_lintable_vault(
     run_cli: CliRunner, driftwood_vault: Path
 ) -> None:

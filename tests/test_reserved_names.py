@@ -7,7 +7,7 @@ import pytest
 
 from conftest import CliRunner
 from sabot_cli.rules import load_schema
-from sabot_cli.vault.paths import reserved_device_name
+from sabot_cli.vault.paths import reserved_device_name, windows_unusable_name
 from support.filesystem import requires_device_file_names
 
 REPOSITORY = Path(__file__).parent.parent
@@ -15,7 +15,25 @@ REPOSITORY = Path(__file__).parent.parent
 
 @pytest.mark.parametrize(
     "name",
-    ["con", "CON", "Con.x.md", "prn.md", "aux.thing", "nul", "com1", "COM9.x", "lpt1.x", "LPT9"],
+    [
+        "con",
+        "CON",
+        "Con.x.md",
+        "prn.md",
+        "aux.thing",
+        "nul",
+        "com1",
+        "COM9.x",
+        "lpt1.x",
+        "LPT9",
+        "com\u00b9",
+        "COM\u00b2.x",
+        "lpt\u00b3.md",
+        "conin$",
+        "CONOUT$.x",
+        "con .md",
+        "aux  ",
+    ],
 )
 def test_a_device_name_before_the_first_dot_is_reserved(name: str) -> None:
     # Given a file name or id that starts with a device name, in any letter case
@@ -36,6 +54,9 @@ def test_a_device_name_before_the_first_dot_is_reserved(name: str) -> None:
         "x.con",
         "x.con.md",
         "auxiliary",
+        "com\u2074",
+        "conin",
+        "con$",
     ],
 )
 def test_other_names_are_not_reserved(name: str) -> None:
@@ -97,3 +118,69 @@ def test_no_tracked_path_has_a_component_that_is_a_device_name() -> None:
     # Then none is reserved, so the repository can be checked out on Windows
     assert paths, "git lists no tracked files"
     assert reserved == []
+
+
+@pytest.mark.parametrize("name", ["note.", "note ", "dir.", "x.y. "])
+def test_a_name_ending_in_a_dot_or_a_space_is_unusable_on_windows(name: str) -> None:
+    # Given a name Windows would strip of its trailing dot or space
+    # When it is judged
+    # Then it is unusable, and the reason says so
+    assert "dot or a space" in str(windows_unusable_name(name))
+
+
+@pytest.mark.parametrize("name", ["note.md", ".gitkeep", "a.b", "x"])
+def test_an_ordinary_name_is_usable_on_windows(name: str) -> None:
+    # Given an ordinary name, including one that starts with a dot
+    # When it is judged
+    # Then nothing is wrong with it
+    assert windows_unusable_name(name) is None
+
+
+@requires_device_file_names
+@pytest.mark.parametrize(
+    ("path", "kind"),
+    [
+        ("clauses/aux/cl.hidden.md", "directory"),
+        ("spans/aux.jsonl", "file"),
+        ("sources/note.", "file"),
+        ("terms/dir /tm.inside.md", "directory"),
+        ("spans/lpt\u00b9.jsonl", "file"),
+        ("spans/conin$.jsonl", "file"),
+    ],
+)
+def test_lint_reports_a_directory_or_file_anywhere_in_the_vault_whose_name_is_unusable(
+    path: str, kind: str, run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a path in the vault with a component Windows cannot hold: a directory, a span file,
+    # a file that is not a note, a name with a trailing space or a superscript device name
+    target = driftwood_vault / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"x\n")
+
+    # When the vault is linted
+    result = run_cli("lint", "--vault", str(driftwood_vault), "--json")
+
+    # Then the entry is reported, by its path, as unusable on Windows
+    reported = [
+        finding
+        for finding in result.json()["findings"]  # type: ignore[union-attr]
+        if finding["class"] == "id-reserved-name"  # type: ignore[index]
+    ]
+    name = path.rsplit("/", 1)[-1] if kind == "file" else path.split("/")[-2]
+    assert [f["path"] for f in reported if f"the {kind} name {name} " in f["message"]]  # type: ignore[index, operator]
+    assert result.returncode == 1
+
+
+def test_lint_does_not_enter_the_git_directory_for_unusable_names(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a .git directory holding a file named for a device
+    git = driftwood_vault / ".git" / "hooks"
+    git.mkdir(parents=True)
+    (git / "aux").write_bytes(b"x")
+
+    # When the vault is linted
+    result = run_cli("lint", "--vault", str(driftwood_vault), "--json")
+
+    # Then it is not reported
+    assert result.returncode == 0

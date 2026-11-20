@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 from conftest import CliRunner
+from support.filesystem import require_case_insensitive
 from support.plant import plant
+from support.vault_state import vault_state
 
 GRAPH = Path("_index") / "graph.json"
 
@@ -328,20 +330,72 @@ def test_the_walk_skips_readmes_and_directories_starting_with_underscore_or_dot(
     assert result.json()["notes"] == 54
 
 
-def test_compile_out_refuses_a_path_that_names_a_note(
+@pytest.mark.parametrize(
+    "inside",
+    [
+        "clauses/cl.setup.md",
+        "_ruleset.yaml",
+        "spans/dw1.jsonl",
+        "graph.json",
+        "sources/graph.json",
+        "_indexed/graph.json",
+        ".sabot-lock",
+        ".sabot-txn-aaaaaaaaaaaa/a.json",
+        "_index/.sabot-new-x",
+    ],
+)
+def test_compile_out_inside_the_vault_is_refused_anywhere_but_below_the_index_directory(
+    inside: str, run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a path inside the vault that is not below _index/: a note, the ruleset, a span
+    # file, a stray name or a name the write transaction owns
+    before = vault_state(driftwood_vault)
+
+    # When the graph is to be written there
+    result = run_cli(
+        "compile", "--out", str(driftwood_vault / inside), "--vault", str(driftwood_vault),
+        "--json",
+    )  # fmt: skip
+
+    # Then compile refuses, without a traceback, and the vault is byte-identical
+    assert result.returncode == 3
+    assert result.json()["error"]["code"] == "out-inside-vault"  # type: ignore[index]
+    assert vault_state(driftwood_vault) == before
+
+
+def test_compile_out_names_a_note_in_another_letter_case_as_inside_the_vault(
     run_cli: CliRunner, driftwood_vault: Path
 ) -> None:
-    # Given a note of the vault
-    note = driftwood_vault / "clauses" / "cl.setup.md"
-    before = note.read_bytes()
+    # Given a file system that ignores letter case, and a note spelled in capitals
+    require_case_insensitive(driftwood_vault.parent)
+    before = vault_state(driftwood_vault)
 
     # When the graph is to be written over it
-    result = run_cli("compile", "--out", str(note), "--vault", str(driftwood_vault), "--json")
+    result = run_cli(
+        "compile", "--out", str(driftwood_vault / "CLAUSES" / "cl.setup.md"),
+        "--vault", str(driftwood_vault), "--json",
+    )  # fmt: skip
 
     # Then compile refuses and the note is untouched
     assert result.returncode == 3
-    assert result.json()["error"]["code"] == "out-is-a-note"  # type: ignore[index]
-    assert note.read_bytes() == before
+    assert result.json()["error"]["code"] == "out-inside-vault"  # type: ignore[index]
+    assert vault_state(driftwood_vault) == before
+
+
+def test_compile_out_below_the_index_directory_is_written_through_the_transaction(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a path below _index/ other than the default
+    target = driftwood_vault / "_index" / "nested" / "copy.json"
+
+    # When the graph is written there
+    result = run_cli("compile", "--out", str(target), "--vault", str(driftwood_vault), "--json")
+
+    # Then it is written and nothing of the transaction remains
+    assert result.returncode == 0
+    assert result.json()["path"] == "_index/nested/copy.json"
+    assert target.is_file()
+    assert not list(driftwood_vault.glob(".sabot-*"))
 
 
 def test_compile_out_refuses_a_directory(run_cli: CliRunner, driftwood_vault: Path) -> None:

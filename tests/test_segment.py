@@ -1,5 +1,6 @@
 """SEG-1 to SEG-10: `segment` turns text into a span file of locations and hashes."""
 
+import errno
 import json
 import re
 import shutil
@@ -8,8 +9,10 @@ from pathlib import Path
 import pytest
 
 from conftest import FIXTURES, CliRunner
+from sabot_cli.vault.transaction import checkpoint_hook
 from source_vaults import (
     error_code,
+    ingest_arguments,
     require_pdftotext,
     snapshot,
     vault_with_sources,
@@ -504,3 +507,146 @@ def test_segment_refuses_a_source_note_it_cannot_update(
     assert code == 3
     assert document["error"]["code"] == "source-note-invalid"  # type: ignore[index]
     assert vault_state(vault) == before
+
+
+def test_resegmenting_in_a_rule_based_mode_removes_the_boundaries_file_of_an_earlier_run(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given edition one segmented in boundaries mode, so the vault holds its boundaries file
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
+    emitted = tmp_path / "emitted.boundaries.jsonl"
+    assert _segment_rules(run_cli, vault, RULES_E1, "--emit-boundaries", str(emitted))[0] == 0
+    boundaries_run = run_cli(
+        "segment", str(RULES_E1), "--source", "dw1", "--mode", "boundaries",
+        "--boundaries", str(emitted), "--vault", str(vault),
+    )  # fmt: skip
+    assert boundaries_run.returncode == 0
+    assert (vault / "spans" / "dw1.boundaries.jsonl").is_file()
+
+    # When it is segmented again in numbered mode
+    code, _ = _segment_rules(run_cli, vault)
+
+    # Then the boundaries file, which no longer describes the spans, is gone with the rest of
+    # the run's writes, and the note names the mode
+    assert code == 0
+    assert not (vault / "spans" / "dw1.boundaries.jsonl").exists()
+    assert "segmenter: numbered\n" in (vault / "sources" / "src.dw1.md").read_text()
+    assert not list(vault.glob(".sabot-*"))
+
+
+def test_a_failed_rule_based_run_keeps_the_boundaries_file_it_found(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault with a boundaries file from an earlier run
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
+    emitted = tmp_path / "emitted.boundaries.jsonl"
+    _segment_rules(run_cli, vault, RULES_E1, "--emit-boundaries", str(emitted))
+    run_cli(
+        "segment", str(RULES_E1), "--source", "dw1", "--mode", "boundaries",
+        "--boundaries", str(emitted), "--vault", str(vault),
+    )  # fmt: skip
+    before = vault_state(vault)
+    work = tmp_path / "work"
+    work.mkdir()
+    shutil.copy(RULES_E1, work / "rules-e1.txt")
+    plant(work, "segmenter-duplicate-locator")
+
+    # When a rule-based run fails its self-check
+    code, _ = _segment_rules(run_cli, vault, work / "rules-e1.txt")
+
+    # Then nothing was written, so the earlier run's files are untouched
+    assert code == 1
+    assert vault_state(vault) == before
+
+
+def test_a_stray_boundaries_file_is_not_read_for_an_edition_segmented_another_way(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a boundaries file that is not valid, beside an edition whose note says numbered
+    (driftwood_vault / "spans" / "dw1.boundaries.jsonl").write_text("not json\n", encoding="utf-8")
+
+    # When the editions are diffed with their texts
+    result = run_cli(
+        "diff-editions", "dw1", "dw2", "--old-text", str(RULES_E1), "--new-text", str(RULES_E2),
+        "--vault", str(driftwood_vault), "--json",
+    )  # fmt: skip
+
+    # Then the stray file is not consulted
+    assert result.returncode == 0, result.stdout
+
+
+@pytest.mark.parametrize("key", ["s1.boundaries", "x.boundaries"])
+def test_a_source_key_ending_in_boundaries_is_refused(
+    key: str, run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault, and a key whose span file would be another source's boundaries file
+    vault = vault_with_sources(run_cli, tmp_path / "vault")
+    before = vault_state(vault)
+
+    # When it is ingested
+    result = run_cli(*ingest_arguments(RULES_E1, key), "--vault", str(vault), "--json")
+
+    # Then it is refused and nothing is written
+    assert result.returncode == 3
+    assert error_code(result) == "source-key-invalid"
+    assert vault_state(vault) == before
+
+
+@pytest.mark.parametrize("key", ["aux", "con", "nul", "com1", "lpt9", "prn.extra", "aux.two"])
+def test_a_source_key_that_names_a_windows_device_is_refused_at_ingest(
+    key: str, run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault, and a key whose span file spans/<key>.jsonl Windows cannot hold
+    vault = vault_with_sources(run_cli, tmp_path / "vault")
+    before = vault_state(vault)
+
+    # When it is ingested
+    result = run_cli(*ingest_arguments(RULES_E1, key), "--vault", str(vault), "--json")
+
+    # Then it is refused and nothing is written
+    assert result.returncode == 3
+    assert error_code(result) == "source-key-invalid"
+    assert "Windows" in result.stdout
+    assert vault_state(vault) == before
+
+
+@pytest.mark.parametrize("target", ["clauses/cl.formats.md", "_ruleset.yaml", "spans/new.jsonl"])
+def test_emit_boundaries_inside_the_vault_is_refused_and_nothing_is_written(
+    target: str, run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault with a source, and an --emit-boundaries path inside it
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
+    before = vault_state(vault)
+
+    # When segment runs
+    code, document = _segment_rules(
+        run_cli, vault, RULES_E1, "--emit-boundaries", str(vault / target)
+    )
+
+    # Then it refuses before writing anything, the note and ruleset included
+    assert code == 3
+    assert document["error"]["code"] == "emit-inside-vault"  # type: ignore[index]
+    assert vault_state(vault) == before
+
+
+def test_boundaries_are_emitted_only_after_the_vault_write_has_committed(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a segment run whose vault write fails after its first applied operation
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
+    before = vault_state(vault)
+    emitted = tmp_path / "out" / "emitted.boundaries.jsonl"
+
+    def fail(phase: str, index: int) -> None:
+        if (phase, index) == ("applied", 0):
+            raise OSError(errno.EIO, "injected")
+
+    # When it runs with --emit-boundaries
+    with checkpoint_hook(fail):
+        code, document = _segment_rules(run_cli, vault, RULES_E1, "--emit-boundaries", str(emitted))
+
+    # Then the run refuses, the vault is as it was and no boundaries file was left behind
+    assert code == 3
+    assert document["error"]["code"] == "write-failed"  # type: ignore[index]
+    assert vault_state(vault) == before
+    assert not emitted.exists()

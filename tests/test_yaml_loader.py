@@ -3,7 +3,7 @@
 import pytest
 import yaml
 
-from sabot_cli.vault._yaml import C_SAFE_STRING_LOADER, PureSafeStringLoader
+from sabot_cli.vault.yaml_loader import C_SAFE_STRING_LOADER, PureSafeStringLoader
 
 _CASES: dict[str, object] = {
     "a: yes": {"a": "yes"},

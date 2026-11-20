@@ -18,7 +18,7 @@ The first line of a test module cites the behaviour IDs it covers. The table bel
 | ING-6 | `--store` keeps the original under `<key>.<hash16>.<ext>`, and a store inside the vault is refused. | `test_ingest.py` |
 | SEG-1 | Numbered mode gives one span per numbered rule. | `test_segment.py` |
 | SEG-2 | A span file holds no word of the source text. | `test_segment.py` |
-| SEG-3 | A wrapped line that starts with a digit joins the open span instead of starting one. | `test_segment.py` |
+| SEG-3 | A wrapped line that starts with a digit joins the open span instead of starting one, unless it is the number the list reaches next or follows a blank line. | `test_segment.py`, `test_source_edge_cases.py` |
 | SEG-4 | Contents entries with dot leaders and page-number lines make no span and add no words to one. | `test_segment.py` |
 | SEG-5 | The self-checks name a duplicate or out-of-order locator, and nothing is written. | `test_segment.py` |
 | SEG-6 | In sentences mode an inserted sentence leaves every other sentence's locator unchanged. | `test_segment.py` |
@@ -79,13 +79,14 @@ These cover rules that have no ID of their own.
 
 | Subject | Test file |
 |---|---|
-| Writes into a vault are all-or-nothing, a killed write is refused until `recover`, and the lock | `test_transaction.py` |
+| Writes into a vault are all-or-nothing, a killed write is refused until `recover`, `recover` trusts nothing a journal names, the lock records its writer, and a signal during rollback waits | `test_transaction.py` |
 | Every command loads the ruleset and schema in the same way | `test_vault_loading.py` |
 | A key written twice is refused, never read as the last value | `test_duplicate_keys.py` |
 | Windows device names in note ids, file names and tracked paths | `test_reserved_names.py` |
 | A registered source and its source note agree | `test_ruleset_agreement.py` |
 | Registering a source edits `_ruleset.yaml` in place | `test_ruleset_writer.py` |
 | The packaged schema is checked as it loads | `test_schema_definition.py` |
+| Output is byte-identical across runs and listing orders, sorted, and names no machine path | `test_determinism.py` |
 | Rules the tools state once: source key, span files, text files, front matter | `test_shared_rules.py` |
 | The span-reference grammar | `test_span_ref.py` |
 | Edge cases of segmentation, diffing and migration | `test_source_edge_cases.py` |
@@ -98,4 +99,5 @@ These cover rules that have no ID of their own.
 
 - A command that refuses input has a test that plants the refusal and checks that nothing was written.
 - Tests that create files must not assume a case-sensitive file system, a POSIX permission model or `/` in a temporary path. Outputs name files relative to the vault with `/`; temporary paths use the platform's separator. `support/filesystem.py` has the markers for tests that need a case-insensitive file system, POSIX permissions or the ability to create a file named for a Windows device.
-- The vault walk lists directories through one function, so `force_listing_order` in `conftest.py` can make a test see directories in a chosen order.
+- The vault walk lists directories through one function (`sabot_cli.vault.walk.directory_entries`), so `force_listing_order` in `conftest.py` can make a test see directories in a chosen order.
+- Tests import only public modules of `sabot_cli`, none whose name starts with an underscore.

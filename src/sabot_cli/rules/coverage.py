@@ -53,9 +53,14 @@ class SourceCoverage:
 
 @dataclass(frozen=True)
 class CoverageReport:
-    """The coverage of each requested source, in source-key order."""
+    """The coverage of each requested source, in source-key order.
+
+    `skipped_superseded` names, sorted, the registered sources left out because a later one
+    supersedes them, so that a report with fewer sources than the ruleset lists says why.
+    """
 
     sources: tuple[SourceCoverage, ...]
+    skipped_superseded: tuple[str, ...] = ()
 
     @property
     def complete(self) -> bool:
@@ -63,12 +68,15 @@ class CoverageReport:
         return all(not source.uncited and not source.partial for source in self.sources)
 
 
-def coverage(vault: Vault, ruleset: Ruleset, spans: SpanIndex) -> CoverageReport:
+def coverage(
+    vault: Vault, ruleset: Ruleset, spans: SpanIndex, skipped_superseded: Sequence[str] = ()
+) -> CoverageReport:
     """Measure the citation coverage of every source that has records in `spans`.
 
     A span is covered when it is cited whole, when a refused or structural note cites the
     subtree of it or of an ancestor, or when each of its sentences is cited. A source the
     ruleset gives no scope entry is wholly in scope, as is one whose entry is empty.
+    `skipped_superseded` is carried into the report unchanged, sorted.
     """
     records_by_source: dict[str, list[SpanRecord]] = defaultdict(list)
     for record in spans.records:
@@ -77,7 +85,8 @@ def coverage(vault: Vault, ruleset: Ruleset, spans: SpanIndex) -> CoverageReport
         tuple(
             _source_coverage(key, records_by_source[key], ruleset.scope.get(key, ()), vault)
             for key in sorted(records_by_source)
-        )
+        ),
+        tuple(sorted(skipped_superseded)),
     )
 
 

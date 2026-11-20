@@ -34,10 +34,17 @@ def register(subparsers: Subparsers) -> None:
         "--edge", action="append", default=[], metavar="E", help="edge to follow (default: all)"
     )
     parser.add_argument(
-        "--direction", choices=("out", "in", "both"), default="out", help="edge direction to follow"
+        "--direction",
+        choices=("out", "in", "both"),
+        default="out",
+        help="edge direction to follow (default: out)",
     )
     parser.add_argument(
-        "--depth", type=_depth, default=1, metavar="N", help=f"hops to follow, 1 to {MAX_DEPTH}"
+        "--depth",
+        type=_depth,
+        default=1,
+        metavar="N",
+        help=f"hops to follow, 1 to {MAX_DEPTH} (default: 1)",
     )
     add_vault_option(parser)
     add_json_option(parser)

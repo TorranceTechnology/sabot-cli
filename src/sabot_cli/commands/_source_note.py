@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from sabot_cli.sources import SourceError, span_file_relative
+from sabot_cli.sources import SourceError, source_note_relative, span_file_relative
 from sabot_cli.vault import (
     FrontMatterError,
     TextFileError,
@@ -18,7 +18,7 @@ _DELIMITER = "---"
 
 def note_relative(key: str) -> str:
     """The vault-relative path of the source note for `key`."""
-    return f"sources/src.{key}.md"
+    return source_note_relative(key)
 
 
 def note_path(vault: Path, key: str) -> Path:

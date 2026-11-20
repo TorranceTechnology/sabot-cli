@@ -10,8 +10,8 @@ from sabot_cli.vault._frontmatter import split as split_front_matter
 from sabot_cli.vault._links import find_wikilinks, parse_wikilink
 from sabot_cli.vault._load import load_vault
 from sabot_cli.vault._model import Link, Note, Problem, ProblemKind, Vault
-from sabot_cli.vault._yaml import load as load_yaml
 from sabot_cli.vault.text import TextFileError, decode_text, encode_text, read_text
+from sabot_cli.vault.yaml_loader import load as load_yaml
 
 __all__ = [
     "FrontMatterError",
