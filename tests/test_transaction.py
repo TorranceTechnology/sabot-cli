@@ -21,6 +21,7 @@ from sabot_cli.vault.transaction import (
     checkpoint_hook,
 )
 from source_vaults import error_code, ingest_arguments, segment_arguments, vault_with_sources
+from support.filesystem import requires_posix_permissions
 from support.vault_state import vault_state
 
 RULES_E1 = FIXTURES / "rules-e1.txt"
@@ -251,6 +252,7 @@ def test_a_termination_signal_rolls_back(run_cli: CliRunner, tmp_path: Path) -> 
     assert signal.getsignal(signal.SIGTERM) is not None
 
 
+@requires_posix_permissions
 def test_a_read_only_registration_file_refuses_and_writes_nothing(
     run_cli: CliRunner, tmp_path: Path
 ) -> None:

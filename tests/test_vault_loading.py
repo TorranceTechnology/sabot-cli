@@ -8,8 +8,9 @@ from conftest import CliRunner
 from invocations import COMMAND_NAMES, invocation
 from support.vault_state import vault_state
 
-# `lint` reports an unusable ruleset as a finding, and `init` has no vault yet.
-LOADING_COMMANDS = tuple(name for name in COMMAND_NAMES if name not in {"init", "lint"})
+# `lint` reports an unusable ruleset as a finding, `init` has no vault yet, and `recover` reads
+# no ruleset because it has to work on a vault that cannot be loaded.
+LOADING_COMMANDS = tuple(name for name in COMMAND_NAMES if name not in {"init", "lint", "recover"})
 
 
 @pytest.mark.parametrize("name", LOADING_COMMANDS)

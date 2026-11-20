@@ -434,12 +434,43 @@ def _missing_parent(records: list[dict[str, object]], _length: int) -> None:
     _record(records, "goal/short-tide")["parent"] = "no-such-parent"
 
 
+def _malformed_record(records: list[dict[str, object]], _length: int) -> None:
+    records.append({"locator": 5})
+
+
+def _inverted_skip(records: list[dict[str, object]], _length: int) -> None:
+    records.append({"end": 5, "reason": "empty", "skip": True, "start": 5})
+
+
+def _malformed_locator(records: list[dict[str, object]], _length: int) -> None:
+    _record(records, "goal/short-tide")["locator"] = "Goal/Short Tide"
+
+
+def _child_past_parent(records: list[dict[str, object]], _length: int) -> None:
+    # Two blank characters separate this parent from the next span, so reaching them adds no gap.
+    _record(records, "goal/full-tide")["end"] = 125
+
+
+def _parent_of_itself(records: list[dict[str, object]], _length: int) -> None:
+    _record(records, "goal")["parent"] = "goal"
+
+
+def _page_goes_back(records: list[dict[str, object]], _length: int) -> None:
+    _record(records, "goal/first-to-bank")["page"] = 2
+
+
 _BOUNDARIES_DEFECTS: dict[str, Callable[[list[dict[str, object]], int], None]] = {
     "boundaries-gap": _gap,
     "boundaries-overlap": _overlap,
     "boundaries-offset-out-of-range": _offset_out_of_range,
     "boundaries-duplicate-locator": _duplicate_boundary_locator,
     "boundaries-missing-parent": _missing_parent,
+    "boundaries-record-malformed": _malformed_record,
+    "boundaries-offset-order": _inverted_skip,
+    "boundaries-locator-malformed": _malformed_locator,
+    "boundaries-child-outside-parent": _child_past_parent,
+    "boundaries-parent-cycle": _parent_of_itself,
+    "boundaries-page-decreasing": _page_goes_back,
 }
 
 

@@ -16,6 +16,7 @@ COMMAND_NAMES: tuple[str, ...] = (
     "diff-editions",
     "migrate-edition",
     "overlap",
+    "recover",
     "schema",
     "search",
     "traverse",
@@ -51,6 +52,7 @@ def invocation(name: str, workdir: Path) -> tuple[str, ...]:
         "diff-editions": ("dw1", "dw2"),
         "migrate-edition": ("dw1", "dw2", "--dry-run"),
         "overlap": ("--source-text", str(RULES_E1)),
+        "recover": (),
         "schema": (),
         "search": ("tide",),
         "traverse": (

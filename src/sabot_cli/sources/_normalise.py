@@ -1,6 +1,6 @@
 """The two hash normalisers.
 
-Both are English-specific: the pronoun table assumes English prose.
+`editorial` is English-specific: its pronoun table assumes English prose. `normalise` is not.
 Every module that hashes text calls these, so a span hashes the same in every mode.
 """
 

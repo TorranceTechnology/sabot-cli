@@ -1,7 +1,7 @@
 """Refuse tracked text files whose words match a guarded term.
 
-Claim: no tracked text file, and no tracked file name, contains a term whose hash is listed.
-Exercises: every lower-cased word n-gram of 1 to 4 words in each file against the hash lists.
+Claim: no tracked text file or file name contains a listed term, and no text file goes unread.
+Exercises: each word n-gram of 1 to 4 words in each file, read four ways, against the hashes.
 Environment: Python 3.12 or later and git on PATH; no network, no third-party packages.
 Real-artifact probe: run over the repository checkout; tests/test_content_guard.py plants a term.
 Refusal twin: tests/test_content_guard.py::test_a_planted_term_is_refused.
@@ -10,10 +10,18 @@ The list stores SHA-256 hashes of terms, never the terms, so the guard can ship 
 repository without naming what it guards. A term is normalised before hashing: accents are
 removed, the text is lower-cased, and it is split into words of letters and digits, which are
 joined by single spaces. Hash a new term with `python ci/check_content_guard.py --hash "<term>"`
-and add the output to the list.
+and add the output to the list; a term of more than four words is refused, since no n-gram that
+long is ever compared.
+
+A file is also read with a camel-case word split into its parts (`FooBar` as `foo bar`) and
+with a trailing possessive (`'s`, straight or curly) dropped, so those spellings of a term still
+match. A file with a UTF-16 or UTF-32 byte order mark is decoded as such. A file that holds no
+NUL byte and is not UTF-8 is reported as unreadable by the guard, which fails the run; a file
+with a NUL byte and no byte order mark is treated as binary and not scanned.
 """
 
 import argparse
+import codecs
 import hashlib
 import re
 import subprocess
@@ -25,12 +33,30 @@ from pathlib import Path
 MAX_TERM_WORDS = 4
 DEFAULT_HASH_FILE = Path(__file__).with_name("content_guard_hashes.txt")
 _WORD = re.compile(r"[^\W_]+")
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_POSSESSIVE = re.compile(r"['\u2019]s\b", re.IGNORECASE)
+_BYTE_ORDER_MARKS = (
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
 
 
-def normalise_words(text: str) -> list[str]:
-    """Split text into lower-cased, accent-free words of letters and digits."""
+def normalise_words(
+    text: str, *, split_camel: bool = False, drop_possessive: bool = False
+) -> list[str]:
+    """Split text into lower-cased, accent-free words of letters and digits.
+
+    `split_camel` also breaks a word where a capital follows a lower-case letter or digit, and
+    `drop_possessive` removes a trailing `'s` before splitting.
+    """
     decomposed = unicodedata.normalize("NFKD", text)
     stripped = "".join(char for char in decomposed if not unicodedata.combining(char))
+    if drop_possessive:
+        stripped = _POSSESSIVE.sub("", stripped)
+    if split_camel:
+        stripped = _CAMEL_BOUNDARY.sub(" ", stripped)
     return _WORD.findall(stripped.lower())
 
 
@@ -56,8 +82,17 @@ def _ngram_hashes(words: Sequence[str]) -> Iterator[str]:
 
 
 def matching_hashes(text: str, guarded: frozenset[str]) -> list[str]:
-    """Return the guarded hashes found in text, sorted and without duplicates."""
-    return sorted(set(_ngram_hashes(normalise_words(text))) & guarded)
+    """Return the guarded hashes found in text, sorted and without duplicates.
+
+    The text is read four ways: as written, with camel-case words split, with possessives
+    dropped, and with both.
+    """
+    found: set[str] = set()
+    for split_camel in (False, True):
+        for drop_possessive in (False, True):
+            words = normalise_words(text, split_camel=split_camel, drop_possessive=drop_possessive)
+            found.update(_ngram_hashes(words))
+    return sorted(found & guarded)
 
 
 def _candidate_files(root: Path) -> list[str]:
@@ -70,17 +105,28 @@ def _candidate_files(root: Path) -> list[str]:
     return sorted(name for name in listing.stdout.decode("utf-8").split("\0") if name)
 
 
+class _Unreadable(Exception):
+    """A file that looks like text but cannot be decoded, so the guard cannot judge it."""
+
+
 def _read_text(path: Path) -> str | None:
+    """The text of a file; None for a binary file; `_Unreadable` for undecodable text."""
     try:
         data = path.read_bytes()
     except OSError:
         return None
+    for mark, encoding in _BYTE_ORDER_MARKS:
+        if data.startswith(mark):
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError as error:
+                raise _Unreadable from error
     if b"\0" in data:
         return None
     try:
         return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
+    except UnicodeDecodeError as error:
+        raise _Unreadable from error
 
 
 def scan(root: Path, guarded: frozenset[str]) -> list[str]:
@@ -91,7 +137,11 @@ def scan(root: Path, guarded: frozenset[str]) -> list[str]:
     findings: list[str] = []
     for name in _candidate_files(root):
         hits = matching_hashes(name, guarded)
-        text = _read_text(root / name)
+        try:
+            text = _read_text(root / name)
+        except _Unreadable:
+            findings.append(f"{name}: not valid text the guard can read")
+            text = None
         if text is not None:
             hits = sorted(set(hits) | set(matching_hashes(text, guarded)))
         findings.extend(f"{name}: matches guarded term {digest[:12]}" for digest in hits)
@@ -111,6 +161,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--hash", metavar="TERM", help="print the hash of a term and exit")
     args = parser.parse_args(argv)
     if args.hash is not None:
+        length = len(normalise_words(args.hash))
+        if length > MAX_TERM_WORDS:
+            sys.stderr.write(
+                f"a term is at most {MAX_TERM_WORDS} words, since longer terms are never "
+                f"compared; this one has {length}\n"
+            )
+            return 2
         sys.stdout.write(term_hash(args.hash) + "\n")
         return 0
     guarded: frozenset[str] = frozenset()

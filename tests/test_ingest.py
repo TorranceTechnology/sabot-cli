@@ -1,6 +1,7 @@
 """ING-1 to ING-6: `ingest` records a source and refuses input it cannot register."""
 
 import hashlib
+import json
 from pathlib import Path
 
 import pypdf
@@ -15,9 +16,11 @@ from source_vaults import (
     require_pdftotext,
     snapshot,
     vault_with_sources,
+    write_text,
 )
 from support.filesystem import require_case_insensitive
 from support.minimal_pdf import write_pdf
+from support.vault_state import vault_state
 
 RULES_E1 = FIXTURES / "rules-e1.txt"
 RULES_E2 = FIXTURES / "rules-e2.txt"
@@ -312,11 +315,83 @@ def test_ingest_refuses_invalid_options_and_writes_nothing(
     assert snapshot(vault) == before
 
 
+def test_ingest_refuses_a_file_that_does_not_exist(run_cli: CliRunner, tmp_path: Path) -> None:
+    # Given a vault and a path with no file behind it
+    vault = vault_with_sources(run_cli, tmp_path / "vault")
+    before = vault_state(vault)
+
+    # When it is ingested
+    result = run_cli(
+        *ingest_arguments(tmp_path / "missing.txt", "dw1"), "--vault", str(vault), "--json"
+    )
+
+    # Then ingest refuses with file-unreadable and the vault is untouched
+    assert result.returncode == 3
+    assert error_code(result) == "file-unreadable"
+    assert vault_state(vault) == before
+
+
+def test_ingest_refuses_a_key_whose_source_note_already_exists(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault holding a source note for a key that the ruleset does not register
+    vault = vault_with_sources(run_cli, tmp_path / "vault")
+    (vault / "sources").mkdir(exist_ok=True)
+    write_text(vault / "sources" / "src.dw1.md", "left by hand\n")
+    before = vault_state(vault)
+
+    # When a file is ingested under that key
+    result = run_cli(*ingest_arguments(RULES_E1, "dw1"), "--vault", str(vault), "--json")
+
+    # Then ingest refuses rather than overwrite the note, and the vault is untouched
+    assert result.returncode == 3
+    assert error_code(result) == "source-note-exists"
+    assert vault_state(vault) == before
+
+
+def test_verify_refuses_a_key_with_no_source_note(run_cli: CliRunner, tmp_path: Path) -> None:
+    # Given a vault with no source registered
+    vault = vault_with_sources(run_cli, tmp_path / "vault")
+    before = vault_state(vault)
+
+    # When a file is verified against a key nobody ingested
+    result = run_cli(
+        "ingest", str(RULES_E1), "--key", "dw1", "--verify", "--vault", str(vault), "--json"
+    )
+
+    # Then it refuses with source-not-found
+    assert result.returncode == 3
+    assert error_code(result) == "source-not-found"
+    assert vault_state(vault) == before
+
+
+def test_verify_refuses_a_source_note_that_records_no_hash(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a registered source whose note has lost its sha256 line
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
+    note = vault / "sources" / "src.dw1.md"
+    lines = note.read_text(encoding="utf-8").splitlines(keepends=True)
+    write_text(note, "".join(line for line in lines if not line.startswith("sha256:")))
+    before = vault_state(vault)
+
+    # When a file is verified against it
+    result = run_cli(
+        "ingest", str(RULES_E1), "--key", "dw1", "--verify", "--vault", str(vault), "--json"
+    )
+
+    # Then it refuses with source-note-invalid
+    assert result.returncode == 3
+    assert error_code(result) == "source-note-invalid"
+    assert vault_state(vault) == before
+
+
 def test_ingest_refuses_a_file_of_unknown_format(run_cli: CliRunner, tmp_path: Path) -> None:
     # Given a file with no recognisable format
     blob = tmp_path / "rules.bin"
     blob.write_bytes(b"\x00\x01")
     vault = vault_with_sources(run_cli, tmp_path / "vault")
+    before = vault_state(vault)
 
     # When it is ingested without --format
     result = run_cli(
@@ -324,9 +399,10 @@ def test_ingest_refuses_a_file_of_unknown_format(run_cli: CliRunner, tmp_path: P
         "--retrieved", RETRIEVED, "--vault", str(vault), "--json",
     )  # fmt: skip
 
-    # Then ingest refuses naming the undetectable format
+    # Then ingest refuses naming the undetectable format, and the vault is untouched
     assert result.returncode == 3
     assert error_code(result) == "format-undetectable"
+    assert vault_state(vault) == before
 
 
 def test_ingest_without_registration_fields_is_a_usage_error(
@@ -364,7 +440,8 @@ def test_text_out_is_reported_by_file_name_without_a_directory(
     # Then neither output carries the directory, only the file's name
     assert as_json.json()["textOut"] == "rules.txt"
     assert "text-out: rules.txt\n" in as_text.stdout
-    assert str(tmp_path) not in as_json.stdout + as_text.stdout
+    for spelling in (str(tmp_path), tmp_path.as_posix(), json.dumps(str(tmp_path))[1:-1]):
+        assert spelling not in as_json.stdout + as_text.stdout
 
 
 def test_ingest_refuses_a_text_output_spelled_in_another_letter_case(

@@ -61,6 +61,65 @@ def test_a_planted_term_is_refused(scratch_repository: Path, text: str) -> None:
     assert "zorblax" not in (result.stdout + result.stderr).lower()
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ZorblaxQuillfeather appears fused",
+        "the Zorblax\u2019s Quillfeather, with a curly apostrophe",
+        "the Zorblax's Quillfeather, with a straight one",
+        "zorblaxQuillfeather in mixed case",
+    ],
+)
+def test_camel_case_and_possessive_spellings_are_refused(
+    scratch_repository: Path, text: str
+) -> None:
+    # Given a tracked file spelling the term fused in camel case, or with a possessive
+    (scratch_repository / "notes.md").write_bytes((text + "\n").encode("utf-8"))
+
+    # When the guard scans the repository
+    result = _scan(scratch_repository)
+
+    # Then it exits 1, names the file, and does not print the term
+    assert result.returncode == 1
+    assert "notes.md" in result.stdout
+    assert "zorblax" not in (result.stdout + result.stderr).lower()
+
+
+def test_a_utf16_file_holding_the_term_is_refused(scratch_repository: Path) -> None:
+    # Given a UTF-16 file, which holds NUL bytes, with the term in it
+    (scratch_repository / "notes.txt").write_bytes(f"Zorblax {INVENTED_TERM}\n".encode("utf-16"))
+
+    # When the guard scans the repository
+    result = _scan(scratch_repository)
+
+    # Then it is read as text and refused
+    assert result.returncode == 1
+    assert "notes.txt" in result.stdout
+
+
+def test_a_text_file_that_is_not_utf8_is_reported_not_skipped(scratch_repository: Path) -> None:
+    # Given a Latin-1 file, which is text but not UTF-8
+    (scratch_repository / "latin.txt").write_bytes("caf\xe9 au lait\n".encode("latin-1"))
+
+    # When the guard scans the repository
+    result = _scan(scratch_repository)
+
+    # Then the guard fails and names the file it could not read
+    assert result.returncode == 1
+    assert result.stdout.startswith("latin.txt:")
+
+
+def test_a_term_longer_than_the_comparison_window_is_refused() -> None:
+    # Given a term of five words, which no four-word n-gram could ever match
+    # When it is hashed
+    result = _run_guard("--hash", "one two three four five")
+
+    # Then the guard refuses, prints no hash, and says why
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "at most 4 words" in result.stderr
+
+
 def test_a_guarded_file_name_is_refused(scratch_repository: Path) -> None:
     # Given a file whose name holds the term
     (scratch_repository / "zorblax-quillfeather.md").write_text("harmless\n", encoding="utf-8")

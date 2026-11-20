@@ -58,6 +58,17 @@ def test_incoming_edges_use_inverse_names(run_cli: CliRunner, driftwood_vault: P
     assert _via(result, "act.launch-boat") == [_hop("ph.sail", "hosts", "act.launch-boat")]
 
 
+def test_an_override_is_followed_backwards_as_overridden_by(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given a keyword that overrides a clause
+    # When following incoming edges from the clause
+    result = _traverse(run_cli, driftwood_vault, "cl.beach-effect", "--direction", "in")
+
+    # Then the keyword is reached through the inverse name `overridden-by`
+    assert _via(result, "kw.buoyant") == [_hop("cl.beach-effect", "overridden-by", "kw.buoyant")]
+
+
 def test_an_edge_filter_names_edges_as_followed_in_each_direction(
     run_cli: CliRunner, driftwood_vault: Path
 ) -> None:

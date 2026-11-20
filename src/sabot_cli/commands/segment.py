@@ -116,7 +116,7 @@ def _segment(args: argparse.Namespace, transaction: Transaction, *, as_json: boo
 
 
 def _emit(target: Path | None, result: SegmentResult) -> bool:
-    """Write the boundaries file when asked, even for a failed result, so it can be repaired."""
+    """Write the boundaries file when asked, even for a rule-based result whose checks failed."""
     text = result.boundaries_text()
     if target is None or text is None:
         return False

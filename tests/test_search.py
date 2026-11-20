@@ -73,18 +73,22 @@ def test_phrase_and_all_terms_modes(run_cli: CliRunner, tmp_path: Path) -> None:
     assert sorted(str(note_id) for note_id in result_ids(either)) == ["p1", "p2", "p3", "p4"]
 
 
-def test_type_filter_and_limit(run_cli: CliRunner, driftwood_vault: Path) -> None:
-    # Given a vault with many clauses
-    unlimited = _search(run_cli, driftwood_vault, "--type", "clause")
+def test_type_filter_and_limit(run_cli: CliRunner, tmp_path: Path) -> None:
+    # Given four keywords and two clauses, all mentioning one word
+    keywords = [
+        NoteSpec(f"kw.{name}", name.title(), "salt rope", type="keyword") for name in "dcba"
+    ]
+    clauses = [NoteSpec(f"cl.{name}", name.title(), "salt salt", type="clause") for name in "xy"]
+    vault = _vault(tmp_path, *keywords, *clauses)
 
-    # When limiting a filter-only search and a ranked one
-    capped = _search(run_cli, driftwood_vault, "--type", "clause", "--limit", "2")
-    ranked = _search(run_cli, driftwood_vault, "squall", "--type", "clause", "--limit", "1")
+    # When limiting a filter-only search and a ranked one to two keywords
+    capped = _search(run_cli, vault, "--type", "keyword", "--limit", "2")
+    ranked = _search(run_cli, vault, "salt", "--type", "keyword", "--limit", "2")
 
-    # Then the first ids by id order come back, and one ranked row
-    assert len(result_ids(unlimited)) > 2
-    assert result_ids(capped) == result_ids(unlimited)[:2]
-    assert len(result_ids(ranked)) == 1
+    # Then the first two keywords by id come back, and two ranked keyword rows with no clause
+    assert result_ids(capped) == ["kw.a", "kw.b"]
+    assert [row["type"] for row in result_rows(ranked)] == ["keyword", "keyword"]
+    assert result_ids(ranked) == ["kw.a", "kw.b"]
 
 
 @pytest.mark.parametrize("limit", ["0", "-1", "two"])

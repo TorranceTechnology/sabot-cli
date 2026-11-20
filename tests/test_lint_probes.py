@@ -6,6 +6,7 @@ import pytest
 
 from conftest import CliResult, CliRunner
 from sabot_cli.vault import load_vault
+from support.filesystem import requires_device_file_names
 from support.plant import LINT_DEFECTS, PlantedDefect, plant
 
 # Warnings that `--strict` raises to errors; the other two warnings stay warnings.
@@ -57,7 +58,15 @@ def _assert_reported_where_planted(
         assert notes == _citers_of(vault, SUPERSEDED_SOURCE)
 
 
-@pytest.mark.parametrize("defect", LINT_DEFECTS)
+@pytest.mark.parametrize(
+    "defect",
+    [
+        pytest.param(defect, marks=requires_device_file_names)
+        if defect == "id-reserved-name"
+        else defect
+        for defect in LINT_DEFECTS
+    ],
+)
 def test_lint_refuses_each_planted_class(
     defect: str, run_cli: CliRunner, driftwood_vault: Path
 ) -> None:

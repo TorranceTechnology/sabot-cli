@@ -19,8 +19,8 @@ from sabot_cli.sources import (
         pytest.param("dw1#10.1.2.2", SpanRef("dw1", "10.1.2.2"), id="dotted"),
         pytest.param("dw1#103.8a", SpanRef("dw1", "103.8a"), id="lettered"),
         pytest.param(
-            "rrop-v11#draw-high/rules-of-draw-high/2",
-            SpanRef("rrop-v11", "draw-high/rules-of-draw-high/2"),
+            "dwh#the-turn/sail/2",
+            SpanRef("dwh", "the-turn/sail/2"),
             id="slug-path",
         ),
         pytest.param("dw1#s-3f9a01c2", SpanRef("dw1", "s-3f9a01c2"), id="sentence-mode-hash"),

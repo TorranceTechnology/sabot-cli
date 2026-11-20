@@ -60,6 +60,6 @@ A record is one JSON object per line with sorted keys and compact separators. A 
 
 ## Support code
 
-- `tests/support/plant.py` applies one named defect to a copy: one defect per lint class of schema v1 (named by the class), five boundaries defects and two segmenter defects. `defect_names()` lists them.
+- `tests/support/plant.py` applies one named defect to a copy: one defect per lint class of schema v1 (named by the class), eleven boundaries defects and two segmenter defects. `defect_names()` lists them.
 - `tests/support/scale_vault.py` generates a schema-valid vault of any size from invented words.
 - `tests/support/minimal_pdf.py` writes a small text PDF that both `pypdf` and `pdftotext` can read.

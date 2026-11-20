@@ -4,8 +4,13 @@ import difflib
 import re
 from pathlib import Path
 
+import pytest
+
 from conftest import CliResult, CliRunner
-from sabot_cli.vault import load_vault
+from sabot_cli.commands import migrate_edition
+from sabot_cli.commands._migrate_text import rewrite_note_text
+from sabot_cli.sources import SourceError
+from sabot_cli.vault import TextFileError, load_vault
 from source_vaults import error_code, snapshot, write_text
 from support.plant import register_second_edition
 
@@ -340,3 +345,33 @@ def test_a_note_that_cannot_be_rewritten_safely_refuses_the_whole_run(
     assert result.returncode == 3
     assert error_code(result) == "migration-rewrite-invalid"
     assert snapshot(driftwood_vault) == before
+
+
+def test_a_note_that_cannot_be_read_back_refuses_the_whole_run(
+    run_cli: CliRunner, driftwood_vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a note that loads when the vault is read but cannot be decoded when it is edited,
+    # as happens when another program changes it in between
+    def undecodable(raw: bytes, name: str) -> str:
+        raise TextFileError("undecodable", name, "is not valid UTF-8")
+
+    monkeypatch.setattr(migrate_edition, "decode_text", undecodable)
+    before = snapshot(driftwood_vault)
+
+    # When it is migrated
+    result = _migrate(run_cli, driftwood_vault)
+
+    # Then the run refuses with note-unreadable and writes nothing
+    assert result.returncode == 3
+    assert error_code(result) == "note-unreadable"
+    assert snapshot(driftwood_vault) == before
+
+
+def test_the_note_rewrite_refuses_text_with_no_front_matter() -> None:
+    # Given note text that has no front matter to edit
+    # When a rewrite is asked of it
+    with pytest.raises(SourceError) as refusal:
+        rewrite_note_text("# A heading and nothing before it\n", {}, None)
+
+    # Then it refuses with note-front-matter-invalid
+    assert refusal.value.code == "note-front-matter-invalid"

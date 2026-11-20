@@ -8,16 +8,26 @@ from pathlib import Path
 import pytest
 
 from conftest import FIXTURES, CliRunner
-from source_vaults import error_code, require_pdftotext, snapshot, vault_with_sources
+from source_vaults import (
+    error_code,
+    require_pdftotext,
+    snapshot,
+    vault_with_sources,
+    write_text,
+)
 from support.minimal_pdf import write_pdf
 from support.plant import plant
+from support.vault_state import vault_state
 
 RULES_E1 = FIXTURES / "rules-e1.txt"
+RULES_E2 = FIXTURES / "rules-e2.txt"
 HANDBOOK = FIXTURES / "handbook.md.txt"
 SHEET = FIXTURES / "sheet.txt"
 SHEET_INSERTED = FIXTURES / "sheet-inserted.txt"
 SHEET_BOUNDARIES = FIXTURES / "sheet.boundaries.jsonl"
 
+_DOT_LEADER_LINE = re.compile(r"\.{4,}")
+_PAGE_FOOTER_LINE = re.compile(r"(?m)^\s*- \d+ -\s*$")
 _RULE_LINE = re.compile(r"(?m)^\d+(?:\.\d+)*[a-z]?\.?\s{2,}\S")
 _BOUNDARIES_DEFECTS = {
     "boundaries-gap": "gap",
@@ -25,14 +35,22 @@ _BOUNDARIES_DEFECTS = {
     "boundaries-offset-out-of-range": "offset-out-of-range",
     "boundaries-duplicate-locator": "duplicate-locator",
     "boundaries-missing-parent": "missing-parent",
+    "boundaries-record-malformed": "record-malformed",
+    "boundaries-offset-order": "offset-order",
+    "boundaries-locator-malformed": "locator-malformed",
+    "boundaries-child-outside-parent": "child-outside-parent",
+    "boundaries-parent-cycle": "parent-cycle",
+    "boundaries-page-decreasing": "page-decreasing",
 }
+# A span that is its own parent also overlaps the children it shares its range with.
+_ALSO_NAMED = {"boundaries-parent-cycle": ("overlap",)}
 
 
 def _segment_rules(
-    run_cli: CliRunner, vault: Path, text: Path = RULES_E1, *extra: str
+    run_cli: CliRunner, vault: Path, text: Path = RULES_E1, *extra: str, source: str = "dw1"
 ) -> tuple[int, dict[str, object]]:
     result = run_cli(
-        "segment", str(text), "--source", "dw1", "--mode", "numbered",
+        "segment", str(text), "--source", source, "--mode", "numbered",
         "--numbering", "dotted-letter", *extra, "--vault", str(vault), "--json",
     )  # fmt: skip
     return result.returncode, result.json()
@@ -41,6 +59,13 @@ def _segment_rules(
 def _records(vault: Path, key: str) -> list[dict[str, object]]:
     path = vault / "spans" / f"{key}.jsonl"
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _without_position(records: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {name: value for name, value in record.items() if name not in ("offset", "page")}
+        for record in records
+    ]
 
 
 def _span_locators(vault: Path, key: str) -> list[str]:
@@ -106,17 +131,30 @@ def test_wrapped_line_starting_with_a_digit_is_not_a_span(
 def test_contents_dot_leaders_and_page_numbers_are_dropped(
     run_cli: CliRunner, tmp_path: Path
 ) -> None:
-    # Given edition one with its contents page and "- n -" page footers
-    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
-    _segment_rules(run_cli, vault)
-    expected = _span_locators(vault, "dw1")
+    # Given edition one, and a copy with its contents entries and "- n -" page footers deleted
+    original = RULES_E1.read_text(encoding="utf-8")
+    cleaned = "".join(
+        line
+        for line in original.splitlines(keepends=True)
+        if not _DOT_LEADER_LINE.search(line) and not _PAGE_FOOTER_LINE.match(line)
+    )
+    assert _DOT_LEADER_LINE.search(original)
+    assert _PAGE_FOOTER_LINE.search(original)
+    cleaned_path = tmp_path / "rules-e1-cleaned.txt"
+    write_text(cleaned_path, cleaned)
+    with_noise = vault_with_sources(run_cli, tmp_path / "with-noise", {"dw1": RULES_E1})
+    without_noise = vault_with_sources(run_cli, tmp_path / "without-noise", {"dw1": RULES_E1})
 
-    # When it is segmented again with no page skipped, so the contents page is read
-    code, _ = _segment_rules(run_cli, vault, RULES_E1, "--skip-pages", "0")
+    # When both are segmented with no page skipped, so the contents page is read
+    code, _ = _segment_rules(run_cli, with_noise, RULES_E1, "--skip-pages", "0")
+    cleaned_code, _ = _segment_rules(run_cli, without_noise, cleaned_path, "--skip-pages", "0")
 
-    # Then neither the contents entries nor the footers produce a span
-    assert code == 0
-    assert _span_locators(vault, "dw1") == expected
+    # Then the spans, with their hashes, are identical but for where they sit in the text: the
+    # entries made no span and the footer text is in no span's words
+    assert (code, cleaned_code) == (0, 0)
+    assert _without_position(_records(with_noise, "dw1")) == _without_position(
+        _records(without_noise, "dw1")
+    )
 
 
 @pytest.mark.parametrize(
@@ -233,7 +271,8 @@ def test_boundaries_mode_refuses_gaps_overlaps_and_bad_offsets(
 
     # Then exactly the planted defect is named, and nothing is written
     assert result.returncode == 1
-    assert list(_failed(result.json())) == [_BOUNDARIES_DEFECTS[defect]]
+    expected = sorted([_BOUNDARIES_DEFECTS[defect], *_ALSO_NAMED.get(defect, ())])
+    assert sorted(_failed(result.json())) == expected
     assert snapshot(vault) == before
 
 
@@ -344,6 +383,7 @@ def test_segment_refuses_text_that_is_not_utf8(run_cli: CliRunner, tmp_path: Pat
     vault = vault_with_sources(run_cli, tmp_path / "vault", {"sh": SHEET})
     broken = tmp_path / "broken.txt"
     broken.write_bytes(b"\xff\xfe not text")
+    before = vault_state(vault)
 
     # When it is segmented
     result = run_cli(
@@ -351,9 +391,10 @@ def test_segment_refuses_text_that_is_not_utf8(run_cli: CliRunner, tmp_path: Pat
         "--json",
     )  # fmt: skip
 
-    # Then segment refuses naming the encoding
+    # Then segment refuses naming the encoding, and the vault is untouched
     assert result.returncode == 3
     assert error_code(result) == "text-undecodable"
+    assert vault_state(vault) == before
 
 
 def test_both_pdf_extractors_yield_the_same_span_locators(
@@ -387,3 +428,79 @@ def test_both_pdf_extractors_yield_the_same_span_locators(
 
     assert [identity(r) for r in records["pypdf"]] == [identity(r) for r in records["pdftotext"]]
     assert [r["locator"] for r in records["pypdf"] if r["kind"] == "span"] == numbers
+
+
+@pytest.mark.parametrize(
+    ("key", "text"),
+    [pytest.param("dw1", RULES_E1, id="dw1"), pytest.param("dw2", RULES_E2, id="dw2")],
+)
+def test_the_fixture_span_files_are_what_the_tool_produces(
+    run_cli: CliRunner, driftwood_vault: Path, key: str, text: Path
+) -> None:
+    # Given the fixture vault with its committed span file for an edition
+    committed = (driftwood_vault / "spans" / f"{key}.jsonl").read_bytes()
+
+    # When the edition's text is segmented again with the settings its source note records
+    code, _ = _segment_rules(run_cli, driftwood_vault, text, source=key)
+
+    # Then the span file is byte-identical to the committed one
+    assert code == 0
+    assert (driftwood_vault / "spans" / f"{key}.jsonl").read_bytes() == committed
+
+
+def test_text_with_no_numbered_rule_makes_no_spans_and_writes_nothing(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault and text with no numbered rule in it
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
+    unnumbered = tmp_path / "prose.txt"
+    write_text(unnumbered, "Boats wait in the harbour until the tide turns.\n")
+    before = vault_state(vault)
+
+    # When it is segmented in numbered mode
+    code, document = _segment_rules(run_cli, vault, unnumbered)
+
+    # Then the no-spans check fails and nothing is written
+    assert code == 1
+    assert _failed(document) == {"no-spans": ["the segmentation produced no spans"]}
+    assert vault_state(vault) == before
+
+
+def test_segment_refuses_a_text_file_that_does_not_exist(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault with a registered source and a path with no file behind it
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
+    before = vault_state(vault)
+
+    # When it is segmented
+    code, document = _segment_rules(run_cli, vault, tmp_path / "missing.txt")
+
+    # Then segment refuses with file-unreadable and the vault is untouched
+    assert code == 3
+    assert document["error"]["code"] == "file-unreadable"  # type: ignore[index]
+    assert vault_state(vault) == before
+
+
+@pytest.mark.parametrize(
+    "note_bytes",
+    [
+        pytest.param(b"\xff\xfe not text", id="not-utf-8"),
+        pytest.param(b"no front matter at all\n", id="no-front-matter"),
+    ],
+)
+def test_segment_refuses_a_source_note_it_cannot_update(
+    run_cli: CliRunner, tmp_path: Path, note_bytes: bytes
+) -> None:
+    # Given a registered source whose note is not a readable note
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
+    (vault / "sources" / "src.dw1.md").write_bytes(note_bytes)
+    before = vault_state(vault)
+
+    # When its text is segmented
+    code, document = _segment_rules(run_cli, vault)
+
+    # Then segment refuses with source-note-invalid before replacing any span file
+    assert code == 3
+    assert document["error"]["code"] == "source-note-invalid"  # type: ignore[index]
+    assert vault_state(vault) == before

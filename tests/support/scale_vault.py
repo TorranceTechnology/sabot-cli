@@ -1,7 +1,7 @@
 """Generate a schema-valid vault of a requested size from invented words.
 
-Nothing generated is committed; benchmarks and the optional performance test call `generate`
-into a temporary directory. The result depends only on `notes` and `seed`.
+Nothing generated is committed; a caller writes it into a temporary directory. The result
+depends only on `notes` and `seed`. No test in the suite calls it yet.
 """
 
 from __future__ import annotations

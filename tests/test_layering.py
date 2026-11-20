@@ -42,11 +42,9 @@ def _imported_names(source: Path, root: Path) -> set[str]:
 
 
 def violations(root: Path, layer: str, forbidden: tuple[str, ...]) -> list[str]:
-    """Return `file: imported-name` for each forbidden import in a layer; empty if it is absent."""
+    """Return `file: imported-name` for each forbidden import in a layer."""
     layer_dir = root / layer
-    if not layer_dir.is_dir():
-        # The layers land after the scaffold; absence passes so this test bites on arrival.
-        return []
+    assert layer_dir.is_dir(), f"the {layer} layer is missing from {root}"
     found: list[str] = []
     for source in sorted(layer_dir.rglob("*.py")):
         for name in sorted(_imported_names(source, root)):

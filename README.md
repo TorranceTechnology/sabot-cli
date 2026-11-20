@@ -111,7 +111,7 @@ The example exits 0. Exit codes: 0 registered, or `--verify` and the hash matche
 
 ### segment
 
-Splits extracted text into spans and writes `spans/<key>.jsonl`, which holds each span's locator, parent, page, offset and hashes and none of its text. It writes nothing when one of its own checks fails. Modes: `numbered` (rule numbers; `--numbering` defaults to `dotted`, and `dotted-letter` also reads `4.2a`), `headings`, `sentences` and `boundaries` (spans proposed in a boundaries file, which the tool checks and hashes). `--skip-pages` defaults to 0 and applies to `numbered` only; pages are counted by form feed, so text without form feeds is one page and nothing is skipped from it. A heading whose slug cannot be cited (such as `s2`, or one with no ASCII letters) fails the `locator-invalid` check.
+Splits extracted text into spans and writes `spans/<key>.jsonl`, which holds each span's locator, parent, page, offset and hashes and none of its text. When one of its own checks fails it writes no span file. `--emit-boundaries FILE` is the exception: it writes the boundaries of a rule-based run even when a check failed, so the proposal can be repaired, and writes nothing when a boundaries file given with `--boundaries` was itself refused. Modes: `numbered` (rule numbers; `--numbering` defaults to `dotted`, and `dotted-letter` also reads `4.2a`), `headings`, `sentences` and `boundaries` (spans proposed in a boundaries file, which the tool checks and hashes). `--skip-pages` defaults to 0 and applies to `numbered` only; pages are counted by form feed, so text without form feeds is one page and nothing is skipped from it. A heading whose slug cannot be cited (such as `s2`, or one with no ASCII letters) fails the `locator-invalid` check.
 
 ```text
 usage: sabot segment [-h] --source KEY
@@ -403,7 +403,7 @@ The example exits 0. Exit codes: 0 traversed; 3 refused (unknown note id, unknow
 
 A process killed outright leaves a journal behind. Every command except `lint` and `recover` then refuses with `transaction-incomplete` until `sabot recover` rolls the write back; `lint` reports it as the `transaction-incomplete` class. A lock file, `.sabot-lock`, makes a second writer refuse with `vault-locked`; `recover` clears a stale one. Out of scope: two processes writing one vault through anything but these commands, and power loss on a file system that does not order a rename against the directory reaching disk.
 
-**Determinism.** The same input gives the same standard output byte for byte, on every run and operating system, whatever order the files were created in. Text is UTF-8 with line feeds. JSON keys are sorted, lists are sorted by a documented key, ranking scores are rounded to four decimal places, and hashes are fixed-length. Paths of vault files are written relative to the vault. No command reads a clock, uses randomness or the network, or runs a model. Tests hold these guarantees for every command.
+**Determinism.** The same input gives the same standard output byte for byte on every run, whatever order the files were created in or the file system lists them in. Text is UTF-8 with line feeds. JSON keys are sorted, lists are sorted by a documented key, ranking scores are rounded to four decimal places, and hashes are fixed-length. Paths of vault files are written relative to the vault. No command reads a clock, uses randomness or the network, or runs a model. A test runs every command on two copies of a vault whose directories are listed in opposite orders and compares the output and every file written, and another checks that no output names the machine's paths, spelled as the platform writes them and as JSON escapes them. Only macOS has run the tests so far; the claim for Linux and Windows is a design goal until CI has run there.
 
 **How an agent should call the tools.**
 
@@ -424,7 +424,7 @@ uv run mypy --strict src                # types
 uv run python ci/check_content_guard.py # content guard
 ```
 
-CI runs these on Linux, macOS and Windows with Python 3.12 and 3.15. Tests drive the commands through `sabot_cli.cli.main` and the installed console script. A command that refuses input has a test that plants the refusal. The Driftwood fixture, its source texts and its benchmark queries are described in [tests/fixtures/driftwood/README.md](tests/fixtures/driftwood/README.md).
+CI is set up to run these on Linux, macOS and Windows with Python 3.12 and 3.15; so far the tests have only been run on macOS. Tests drive the commands through `sabot_cli.cli.main` and the installed console script. A command that refuses input has a test that plants the refusal, and a test fails when a refusal code appears in the source that no test names. [tests/README.md](tests/README.md) lists the behaviours the tests hold and where each is tested. The Driftwood fixture, its source texts and its benchmark queries are described in [tests/fixtures/driftwood/README.md](tests/fixtures/driftwood/README.md).
 
 ## Layout
 
@@ -439,7 +439,7 @@ src/sabot_cli/
   rules/            schema v1 (schema_v1.yaml), the ruleset file, lint checks, coverage, the compiled graph; imports sources and vault
   sources/          text extraction, segmentation, span files, boundaries, edition diff, migration planning, overlap; imports only vault
   search/           property filters, full-text ranking, traversal; imports only vault
-tests/              pytest; the Driftwood fixture (fixtures/driftwood); shared helpers (support/)
+tests/              pytest; README.md lists the behaviours tested; the Driftwood fixture (fixtures/driftwood); shared helpers (support/)
 ci/                 content guard and its hash list
 docs/               schema-v1.md, the notes reference
 ```

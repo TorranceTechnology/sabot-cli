@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from sabot_cli.cli import main
+from sabot_cli.vault import _walk
 
 FIXTURES = Path(__file__).parent / "fixtures" / "driftwood"
 FIXTURE_VAULT = FIXTURES / "vault"
@@ -44,10 +45,29 @@ def run_cli(capsys: pytest.CaptureFixture[str]) -> CliRunner:
     return run
 
 
+type ListingOrder = Callable[[bool], None]
+
+
+@pytest.fixture
+def force_listing_order(monkeypatch: pytest.MonkeyPatch) -> ListingOrder:
+    """Make the vault walk see every directory in name order (False) or reverse name order (True).
+
+    File systems list directories in an order of their own, often the sorted one, so a copy
+    made in another order proves nothing; this forces the order the walk is handed.
+    """
+
+    def force(reverse: bool) -> None:
+        def listing(directory: Path) -> list[Path]:
+            return sorted(directory.iterdir(), key=lambda entry: entry.name, reverse=reverse)
+
+        monkeypatch.setattr(_walk, "directory_entries", listing)
+
+    return force
+
+
 def copy_vault(destination: Path, *, reverse: bool = False) -> Path:
     """Copy the fixture vault file by file, creating files in sorted or reverse order."""
-    if not FIXTURE_VAULT.is_dir():
-        pytest.skip("the Driftwood fixture vault is not present")
+    assert FIXTURE_VAULT.is_dir(), f"the Driftwood fixture vault is missing: {FIXTURE_VAULT}"
     files = sorted(path for path in FIXTURE_VAULT.rglob("*") if path.is_file())
     for source in reversed(files) if reverse else files:
         target = destination / source.relative_to(FIXTURE_VAULT)

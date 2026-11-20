@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from conftest import CliRunner
+from support.filesystem import requires_posix_permissions
 
 
 def _snapshot(directory: Path) -> dict[str, bytes]:
@@ -110,6 +111,7 @@ def test_init_below_a_file_is_a_refusal_not_a_traceback(run_cli: CliRunner, tmp_
     assert blocker.read_text(encoding="utf-8") == "a file\n"
 
 
+@requires_posix_permissions
 def test_init_under_a_read_only_parent_is_a_refusal_not_a_traceback(
     run_cli: CliRunner, tmp_path: Path
 ) -> None:

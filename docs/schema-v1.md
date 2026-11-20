@@ -488,7 +488,7 @@ Example record:
 {"editorialSha256":"1ac97d522c5a419d","kind":"span","locator":"1.3","offset":980,"page":3,"parent":"1","position":3,"sentences":3,"sha256":"d6e0c3f00e47f85c","source":"dw1","span":"dw1#1.3","words":16}
 ```
 
-Segmentation modes decide the locators: `numbered` uses the rule numbers of the text (`4.2a`, parent by number), `headings` uses heading slugs joined by `/` with numbered items beneath a heading, `sentences` gives every sentence a locator `s-<8 hex>` taken from its hash, and `boundaries` takes the spans from a boundaries file. `segment` writes nothing unless its own checks pass: no duplicate locators, every locator citable (`locator-invalid`), at least one span, locators not descending among siblings, and page numbers not decreasing. A sentence that appears twice gets `s-<8 hex>` for its first occurrence and `s-<8 hex>-2`, `-3` for the repeats.
+Segmentation modes decide the locators: `numbered` uses the rule numbers of the text (`4.2a`, parent by number), `headings` uses heading slugs joined by `/` with numbered items beneath a heading, `sentences` gives every sentence a locator `s-<8 hex>` taken from its hash, and `boundaries` takes the spans from a boundaries file. `segment` writes no span file unless its own checks pass: no duplicate locators, every locator citable (`locator-invalid`), at least one span, locators not descending among siblings, and page numbers not decreasing. A sentence that appears twice gets `s-<8 hex>` for its first occurrence and `s-<8 hex>-2`, `-3` for the repeats.
 
 A boundaries file proposes spans for the `boundaries` mode, so that an agent can mark the spans of a document the rule-based modes cannot read and the tool still checks and hashes them. One JSON object per line. Offsets are character offsets into the extracted text, the end exclusive.
 
@@ -497,7 +497,7 @@ A boundaries file proposes spans for the `boundaries` mode, so that an agent can
 | Span | `locator`, `parent` (or null), `start`, `end`, and optionally `page` | One span. |
 | Skip | `skip` (true), `reason`, `start`, `end` | Text that is deliberately not a span, such as a page number. |
 
-A record that other records name as their parent is a parent. Its range covers its children, and its own text is whatever lies before its first child. Every non-whitespace character of the text must lie in exactly one leaf span, one skip or one parent's own text. The checks, each reported by name, are `child-outside-parent`, `duplicate-locator`, `gap`, `locator-malformed`, `missing-parent`, `offset-order`, `offset-out-of-range`, `overlap`, `parent-cycle` and `record-malformed`. `segment --emit-boundaries FILE` writes the boundaries of any segmentation, including a failed one, so that it can be repaired and fed back. The fixture holds an example, `tests/fixtures/driftwood/sheet.boundaries.jsonl`.
+A record that other records name as their parent is a parent. Its range covers its children, and its own text is whatever lies before its first child. Every non-whitespace character of the text must lie in exactly one leaf span, one skip or one parent's own text. The checks, each reported by name, are `child-outside-parent`, `duplicate-locator`, `gap`, `locator-malformed`, `missing-parent`, `offset-order`, `offset-out-of-range`, `overlap`, `parent-cycle` and `record-malformed`. `segment --emit-boundaries FILE` writes the boundaries of a rule-based segmentation, including one whose checks failed, so that it can be repaired and fed back; a boundaries-mode run whose file was refused writes none. The fixture holds an example, `tests/fixtures/driftwood/sheet.boundaries.jsonl`.
 
 ## The ruleset file
 
@@ -666,19 +666,19 @@ Every source has its own span file, written by `segment` after `ingest`. A regis
 
 No command in this repository writes a conformance clause list or a classification manifest yet. This section states how the note attributes are meant to map onto them, as the consumer repositories of the engine carry them, so that a generator and an author agree. Check it against the generator when one exists.
 
-**Clause list.** A row stands for one note whose status is `mapped`, `derived` or `refused`. Notes that are `structural`, `pending` or `superseded` have no row.
+**Clause list.** A row stands for one note whose status is `mapped`, `derived` or `refused`. Notes that are `structural` or `superseded` have no row, and a note that is still `pending` blocks the list: it is not ready to be mapped. An author writes only the span references and the paraphrase; every other field is computed in the same way for every game.
 
 | Row field | Taken from |
 |---|---|
-| `clauseId` | The note's `clause-id` when it has one, so an existing id survives; otherwise a new id is made when the map is compiled. |
+| `clauseId` | The note's `clause-id` when it has one, so an existing id survives; otherwise the note id. |
 | `source` | The `label` of the source note the note cites. A derived note cites nothing; consumer repositories mark such rows with the source `derived`. |
-| `section` | Where in the source the note's spans lie, from the locators of its `source` entries. |
-| `page` (optional) | The `page` of the cited span in its span file. |
+| `section` | The locators of the note's cited spans in document order, joined by `, `. |
+| `page` | The `page` of the first cited span in its span file, present whenever the source has pages. |
 | `paraphrase` | The compiled paraphrase of the note body. |
 | `status` | `MAPPED` for a mapped or derived note, `REFUSED` for a refused one. |
-| `fixtures` | The `fixtures` of the `test-obligation` notes that point at the note through `tested-by`; an empty list for a refused row. |
-| `tests` (optional) | The `tests` of those obligations, for a row proved by a named test instead of a fixture. |
-| `refusalReason` | The note's `refusal`; present on refused rows only. |
+| `fixtures` | The `fixtures` of the `test-obligation` notes that point at the note through `tested-by`; always present, an empty list for a refused row. |
+| `tests` | The `tests` of those obligations; always present, an empty list when none names a test. |
+| `refusalReason` | The note's `refusal`; present exactly when the row is `REFUSED`. |
 
 **Surface classification.** The classification manifest has one entry per element of the game definition, keyed `<kind>:<name>` such as `command:launch-boat`. A `construct` note supplies the element: `surface` is its element id and `construct` lists the engine construct kinds it stands for. The entry's `classification` is `MAPPED` with the `fixtures` of the construct's test obligations, or `REFUSED` with a `reason`. A deliberately unsupported part of the rules is a `scope:<name>` entry, always `REFUSED`: the `scope-key` of a refused note names the entry the note accounts for and its `refusal` is the reason.
 

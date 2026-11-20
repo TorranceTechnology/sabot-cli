@@ -8,6 +8,7 @@ import pytest
 from conftest import CliRunner
 from sabot_cli.rules import load_schema
 from sabot_cli.vault.paths import reserved_device_name
+from support.filesystem import requires_device_file_names
 
 REPOSITORY = Path(__file__).parent.parent
 
@@ -53,6 +54,7 @@ def test_no_node_type_prefix_of_the_schema_is_a_device_name() -> None:
     assert [prefix for prefix in prefixes if reserved_device_name(prefix)] == []
 
 
+@requires_device_file_names
 def test_a_note_file_named_for_a_device_is_reported(
     run_cli: CliRunner, driftwood_vault: Path
 ) -> None:

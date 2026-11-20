@@ -1,5 +1,6 @@
 """PKG-1 and PKG-2: the console script and the shape of a refusal."""
 
+import json
 import shutil
 import subprocess
 import sys
@@ -71,4 +72,5 @@ def test_json_error_shape_on_input_refusal(name: str, run_cli: CliRunner, tmp_pa
     assert isinstance(error, dict)
     assert isinstance(error["code"], str)
     assert isinstance(error["message"], str)
-    assert str(tmp_path) not in result.stdout
+    for spelling in (str(tmp_path), tmp_path.as_posix(), json.dumps(str(tmp_path))[1:-1]):
+        assert spelling not in result.stdout
