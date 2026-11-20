@@ -1,0 +1,471 @@
+# Schema v1 for card-game rules graphs. The fixed part: a ruleset may add to it through the
+# `extensions` block of its _ruleset.yaml and may not remove or redefine anything here.
+schema-version: 1
+
+statuses: [mapped, refused, derived, structural, pending, superseded]
+
+# Attribute types: id, text, date, int, bool, enum, list. A list names its element kind in `of`.
+# `on` limits an attribute to node types; absent means any type. `required` means every note.
+attributes:
+  id:
+    type: id
+    required: true
+    pattern: '^[a-z][a-z0-9-]*(\.[a-z0-9-]+)*$'
+    note: Stable and never reused; equals the file name without .md and starts with the type's prefix.
+  type:
+    type: enum
+    required: true
+    values-from: node-types
+    note: The node type.
+  title:
+    type: text
+    required: true
+    note: A short label in the author's own words.
+  status:
+    type: enum
+    required: true
+    values-from: statuses
+    note: How the note relates to the source text.
+  confidence:
+    type: enum
+    required: true
+    values: [high, medium, low]
+    note: How sure the author is that the note says what the source means.
+  rev:
+    type: int
+    required: true
+    minimum: 1
+    note: Revision counter, raised on every edit that changes meaning.
+  schema:
+    type: int
+    required: true
+    note: The schema version the note was written under; equals the ruleset's schemaVersion.
+  source:
+    type: list
+    of: spanref
+    note: Span references that ground the note; needed by every status except derived.
+  modality:
+    type: enum
+    on: [clause]
+    values: [must, must-not, may, definition, procedure, outcome]
+    note: What kind of statement a clause makes.
+  scope:
+    type: list
+    of: id
+    note: Variant ids the note applies under; empty or absent means every variant.
+  chooser:
+    type: enum
+    on: [decision-point]
+    values: [turn-player, non-turn-player, controller, owner, affected-player, rules]
+    note: Who makes the choice.
+  refusal:
+    type: text
+    note: Why the engine will not model this; required when the status is refused.
+  rationale:
+    type: text
+    note: Why a derived note exists; required when the status is derived.
+  construct:
+    type: list
+    of: construct-kind
+    note: The engine construct kinds a note is meant to become; a hint on all but construct notes.
+  admits:
+    type: enum
+    on: [timing-window]
+    values: [any, pass-only]
+    note: What players may do inside the window.
+  simultaneity:
+    type: enum
+    on: [procedure]
+    values: [batch]
+    note: Marks a procedure whose steps apply together.
+  kind:
+    type: enum
+    on: [open-question, source]
+    values-by-type:
+      open-question: [source-defect, restatement-conflict, terminology-conflict, gap, inference]
+      source: [edition, errata, ruling, faq]
+    note: The kind of open question, or the kind of source document.
+  ownership:
+    type: enum
+    on: [zone]
+    values: [player, shared]
+    note: Whether each player has an instance of the zone or all share one.
+  visibility:
+    type: enum
+    on: [zone]
+    values: [public, hidden, owner]
+    note: Who can see the cards in the zone.
+  ordered:
+    type: bool
+    on: [zone]
+    note: Whether the order of cards in the zone matters.
+  values:
+    type: list
+    of: text
+    on: [parameter]
+    note: One variant-id=value string per variant the parameter differs in.
+  relation-type:
+    type: enum
+    on: [relation]
+    values-from: edge-types
+    note: The edge type the relation node stands for.
+  condition:
+    type: text
+    on: [relation]
+    note: A qualifier on the relation, in the author's words.
+  stale:
+    type: bool
+    note: True when an edition migration flagged a cited span as changed.
+  stale-reason:
+    type: enum
+    values: [editorial, substantive, removed]
+    note: Why the note is stale.
+  clause-id:
+    type: text
+    note: An existing clause-map id to keep when a map is compiled from the graph.
+  scope-key:
+    type: text
+    note: The classification scope key a refused note accounts for.
+  surface:
+    type: text
+    on: [construct]
+    note: The classification element id a construct note stands for.
+  fixtures:
+    type: list
+    of: text
+    on: [test-obligation]
+    note: Fixture ids that discharge the obligation.
+  tests:
+    type: list
+    of: text
+    on: [test-obligation]
+    note: Test names that discharge the obligation.
+  tags:
+    type: list
+    of: text
+    note: Free-form labels.
+  key:
+    type: text
+    on: [source]
+    note: The source key used at the start of span references.
+  label:
+    type: text
+    on: [source]
+    note: The name clause maps and reports use for the source.
+  edition:
+    type: text
+    on: [source]
+    note: The edition name or number.
+  effective:
+    type: date
+    on: [source]
+    note: The date the edition took effect.
+  url:
+    type: text
+    on: [source]
+    note: Where the document was obtained.
+  archive-url:
+    type: text
+    on: [source]
+    note: An archived copy of the page, when one exists.
+  retrieved:
+    type: date
+    on: [source]
+    note: The date the copy was obtained.
+  bytes:
+    type: int
+    on: [source]
+    note: The size of the original file.
+  sha256:
+    type: text
+    on: [source]
+    note: The SHA-256 of the original file.
+  extractor:
+    type: text
+    on: [source]
+    note: The tool and version that extracted the text.
+  segmenter:
+    type: text
+    on: [source]
+    note: The segmentation mode used for the span file.
+  supersedes:
+    type: text
+    on: [source]
+    note: The key of the source this one replaces.
+  amends:
+    type: text
+    on: [source]
+    note: The key of the source this one corrects.
+  spans:
+    type: text
+    on: [source]
+    note: The vault-relative path of the span file.
+
+node-types:
+  source:
+    prefix: src.
+    side: source
+    note: A pinned copy of one published document.
+  clause:
+    prefix: cl.
+    side: source
+    note: One normative statement.
+  term:
+    prefix: term.
+    side: source
+    note: A word the rules define.
+  variant:
+    prefix: var.
+    side: source
+    note: A play format or option.
+  parameter:
+    prefix: par.
+    side: source
+    note: A value that differs between variants.
+  ruling:
+    prefix: rul.
+    side: source
+    note: A published decision about a situation.
+  example:
+    prefix: ex.
+    side: source
+    note: A worked case from the source or written for a test.
+  open-question:
+    prefix: oq.
+    side: source
+    note: An ambiguity or defect that waits for a human decision.
+  zone:
+    prefix: zone.
+    side: model
+    note: A place cards can be.
+  phase:
+    prefix: ph.
+    side: model
+    note: A phase or step of a turn.
+  procedure:
+    prefix: proc.
+    side: model
+    note: A multi-step routine used from several places.
+  action:
+    prefix: act.
+    side: model
+    note: Something a player may choose to do.
+  decision-point:
+    prefix: dp.
+    side: model
+    note: A choice the rules give to a named player.
+  keyword-action:
+    prefix: ka.
+    side: model
+    note: A verb with a defined meaning.
+  card-type:
+    prefix: ct.
+    side: model
+    note: A kind of card, or a group of kinds.
+  characteristic:
+    prefix: ch.
+    side: model
+    note: A value a card carries or derives.
+  keyword:
+    prefix: kw.
+    side: model
+    note: A named ability shorthand.
+  rule-process:
+    prefix: rp.
+    side: model
+    note: A check applied to the game state whenever the rules call for it.
+  timing-window:
+    prefix: tw.
+    side: model
+    note: A point at which players may act or respond.
+  trigger-pattern:
+    prefix: tp.
+    side: model
+    note: A class of event that can set off an effect.
+  replacement-pattern:
+    prefix: rpl.
+    side: model
+    note: A class of event that an effect can replace.
+  ongoing-pattern:
+    prefix: og.
+    side: model
+    note: A class of lasting modification and where it applies in order.
+  relation:
+    prefix: rel.
+    side: model
+    note: An edge written as a note so it can carry qualifiers.
+  construct:
+    prefix: cst.
+    side: build
+    note: A named artefact of the generated game.
+  test-obligation:
+    prefix: to.
+    side: build
+    note: A requirement for a test, normally generated.
+
+# `domain` and `range` list node types; "*" admits any. An inverse is computed by compile and
+# never authored. A symmetric edge is authored on one end only. No edge or inverse name may equal
+# an attribute name.
+edge-types:
+  defines:
+    domain: [clause]
+    range: [term, zone, phase, keyword, keyword-action, card-type, characteristic, rule-process, timing-window, procedure, action, parameter, variant]
+    inverse: defined-by
+    note: The clause gives the target its meaning.
+  refines:
+    domain: [clause, keyword, ruling]
+    range: [clause, keyword]
+    inverse: refined-by
+    note: The source narrows or details the target.
+  restates:
+    domain: [clause]
+    range: [clause]
+    inverse: restates
+    symmetric: true
+    note: Both clauses state one rule in different places.
+  overrides:
+    domain: [clause, keyword]
+    range: [clause, keyword, action]
+    inverse: overridden-by
+    note: Where both apply, the source wins.
+  exception-to:
+    domain: [clause, keyword]
+    range: [clause, keyword]
+    inverse: has-exception
+    note: The source carves a bounded case out of the target.
+  precedes:
+    domain: [phase, clause, procedure]
+    range: [phase, clause, procedure]
+    inverse: follows
+    acyclic: true
+    note: The source happens before the target.
+  returns-to:
+    domain: [phase, clause]
+    range: [phase]
+    inverse: returned-to-by
+    note: An explicit loop back; exempt from the acyclic rule of precedes.
+  part-of:
+    domain: [phase, clause, procedure, rule-process]
+    range: [phase, procedure]
+    inverse: has-part
+    note: The source is a component of the target.
+  invokes:
+    domain: [clause, phase, rule-process]
+    range: [procedure]
+    inverse: invoked-by
+    note: The source runs the target routine.
+  occurs-in:
+    domain: [action, timing-window, trigger-pattern, decision-point]
+    range: [phase, procedure]
+    inverse: hosts
+    note: The source takes place during the target.
+  requires:
+    domain: [action, clause]
+    range: ["*"]
+    inverse: required-by
+    note: The source needs the target to hold or exist.
+  triggers:
+    domain: [clause, action, procedure, rule-process, keyword-action]
+    range: [trigger-pattern]
+    inverse: triggered-by
+    note: The source produces an event of the target class.
+  defers:
+    domain: [clause, keyword]
+    range: [trigger-pattern, timing-window]
+    inverse: deferred-by
+    note: The source postpones collection of the target or narrows it.
+  replaces:
+    domain: [clause, replacement-pattern]
+    range: [clause, procedure]
+    inverse: replaced-by
+    note: The source substitutes for the target.
+  decided-by:
+    domain: [clause]
+    range: [decision-point]
+    inverse: decides
+    note: The target says who chooses.
+  parameterised-by:
+    domain: [clause, rule-process]
+    range: [parameter]
+    inverse: parameterises
+    note: The source reads its number or setting from the target.
+  applies-in:
+    domain: [clause, parameter]
+    range: [variant]
+    inverse: governs
+    note: The source holds in the target variant.
+  references:
+    domain: ["*"]
+    range: ["*"]
+    inverse: referenced-by
+    note: An untyped cross-reference, to be replaced by a typed edge where one fits.
+  conflicts-with:
+    domain: [clause]
+    range: [clause]
+    inverse: conflicts-with
+    symmetric: true
+    note: The two clauses cannot both be followed; an open question must record it.
+  resolved-by:
+    domain: [open-question]
+    range: [clause]
+    inverse: resolves
+    note: The target is the decision that closes the question.
+  illustrates:
+    domain: [example, ruling]
+    range: ["*"]
+    inverse: illustrated-by
+    note: The source shows the target at work.
+  implemented-by:
+    domain: ["*"]
+    range: [construct]
+    inverse: implements
+    note: The target construct realises the source; written by the build stage.
+  tested-by:
+    domain: ["*"]
+    range: [test-obligation]
+    inverse: verifies
+    note: The target obligation checks the source; written by the generator.
+
+construct-kinds:
+  - zone
+  - phase
+  - phase-transition
+  - command
+  - affordance
+  - reducer
+  - guard
+  - trigger
+  - interceptor
+  - state-check
+  - window-blocking
+  - window-lapsing
+  - modifier-layer
+  - visibility-grant
+  - ability
+  - card-script
+  - random-stream
+  - definition-data
+  - match-end
+  - none
+
+# What each node type must carry beyond the required attributes. `any-edge` needs at least one
+# authored edge of the named kinds; `any-inbound-edge` needs some other note to name this one.
+type-requirements:
+  clause: {attributes: [modality]}
+  decision-point: {attributes: [chooser]}
+  zone: {attributes: [ownership, visibility, ordered]}
+  parameter: {attributes: [values], any-edge: [applies-in]}
+  relation: {attributes: [relation-type]}
+  open-question: {attributes: [kind]}
+  timing-window: {attributes: [admits]}
+  construct: {attributes: [construct]}
+  test-obligation: {any-inbound-edge: [tested-by]}
+  source: {attributes: [key, label, sha256, bytes, retrieved, spans]}
+  example: {any-edge: [illustrates]}
+  ruling: {any-edge: [illustrates, refines]}
+
+status-requirements:
+  mapped: {attributes: [source]}
+  refused: {attributes: [source, refusal]}
+  derived: {attributes: [rationale]}
+  superseded: {any-edge: [refines, resolved-by]}

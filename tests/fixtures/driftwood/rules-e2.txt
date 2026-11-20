@@ -1,0 +1,195 @@
+
+
+
+
+
+
+                               DRIFTWOOD
+
+                 A Card Game of Tides, Boats and Cargo
+
+                                 Rules
+
+                            For two players
+
+
+
+Contents
+
+1. Components ............................................. 3
+2. Zones .................................................. 3
+3. Setup .................................................. 4
+4. The Turn ............................................... 5
+5. Boats and Cargo ........................................ 6
+6. Squalls and the Tide ................................... 7
+7. Winning and Variants ................................... 8
+8. Clarifications ......................................... 8
+9. Solo Play .............................................. 8
+
+                                 - 2 -
+
+1.      Components
+
+1.1     Driftwood is a card game for two players.
+
+1.2     The deck holds fifty-four cards of three kinds: Boat cards,
+        Cargo cards and Squall cards.
+
+1.3     Every Boat card shows a capacity. Every Cargo card shows a
+        weight. Squall cards show neither.
+
+1.4     A tide marker rests on a track of five marks, numbered one to
+        five, between the two players.
+
+2.      Zones
+
+2.1     The Stock is a shared pile of face-down cards. No player may
+        look at it, and its order is kept.
+
+2.2     A player's Hand holds cards that only that player may look at.
+        The order of cards in a Hand does not matter.
+
+2.3     A player's Harbour is the area in front of that player where
+        boats lie face up. Cargo loaded onto a boat lies on that boat,
+        face up.
+
+2.4     The Wreck pile is a shared pile of face-up cards. The card
+        placed most recently lies on top.
+
+2.5     If the Stock is empty when a card must be drawn, shuffle the
+        Wreck pile and turn it face down to form a new Stock.
+
+
+                                 - 3 -
+
+3.      Setup
+
+3.1     The winner of a coin toss chooses who takes the first turn and
+        must announce the choice before cards are dealt. If the winner
+        is unsure, they may let the other player decide.
+
+3.2     Shuffle all fifty-four cards to form the Stock.
+
+3.3     Each player draws five cards from the Stock to form an opening
+        Hand.
+
+3.4     Place the tide marker on mark one.
+
+
+                                 - 4 -
+
+4.      The Turn
+
+4.1     A turn has four phases, taken in this order: Ebb, Sail, Flood
+        and Moor. The player whose turn it is, the active player, takes
+        all four.
+
+4.2     In the Ebb phase the active player draws cards from the Stock
+        until holding five cards in their Hand.
+
+4.3     In the Sail phase the active player may take any number of the
+        actions in section 5, in any order.
+
+4.4     In the Flood phase the tide rises by one mark. Then the
+        slack-water window opens. Each player, starting with the player
+        who is not active, may play one Squall card or pass. The window
+        closes when both players have passed in succession.
+
+4.5     In the Moor phase the active player discards cards from their
+        Hand until holding at most seven.
+
+4.5a    The turn then passes to the other player, who begins again at
+        the Ebb phase.
+
+
+                                 - 5 -
+
+5.      Boats and Cargo
+
+5.1     To launch a boat, the active player discards one card from their
+        Hand and moves a Boat card from their Hand to their Harbour.
+
+5.1a    A player may launch at most two boats in each turn.
+
+5.2     The active player may move a Cargo card from their Hand onto a
+        boat in their Harbour. A boat may carry any number of Cargo
+        cards.
+
+5.3     Whenever the combined weight of the cargo on a boat is greater
+        than that boat's capacity, that boat is wrecked. A wrecked boat
+        and all of its cargo go to the Wreck pile. If several boats are
+        overloaded at the same moment, all of them are wrecked together.
+
+5.4     A boat that carries at least one Cargo card may sail out. The
+        owner scores points equal to the weight aboard. A boat carrying
+        3 units of weight scores 3 points. Its cargo then goes to the
+        Wreck pile and the boat returns to its owner's Hand.
+
+5.5     Example: A boat has capacity four and carries cargo of weight
+        two and weight one. The owner loads a cargo of weight two. The
+        total is now five, which is more than four, so the boat is
+        wrecked together with all three Cargo cards.
+
+
+                                 - 6 -
+
+6.      Squalls and the Tide
+
+6.1     The tide rises by moving the marker up one mark. When the marker
+        would move past mark five, it goes back to mark one.
+
+6.2     During the slack-water window a player may play a Squall card
+        from their Hand and choose one boat in the other player's
+        Harbour. That boat is beached.
+
+6.3     A beached boat loses all of its cargo, which goes to the Wreck
+        pile. The boat itself stays in its Harbour.
+
+6.4     A boat marked Buoyant cannot be beached.
+
+6.5     While the marker is on mark five, a beached boat keeps its cargo
+        and the Squall goes to the Wreck pile instead.
+
+6.6     While the marker is on mark five, the capacity of every boat
+        counts as one higher.
+
+6.7     When a boat is launched, its owner looks at the top card of the
+        Stock.
+
+6.7a    That look is taken at the start of the following Flood phase,
+        not at the moment of launch.
+
+
+                                 - 7 -
+
+7.      Winning and Variants
+
+7.1     Driftwood has two formats: the Short Tide and the Full Tide.
+
+7.2     In the Short Tide a player wins on reaching ten points. In the
+        Full Tide a player wins on reaching twenty points.
+
+8.      Clarifications
+
+8.1     No player may end a turn holding more than seven cards.
+
+8.2     When a Squall is played against a Buoyant boat, nothing happens
+        to the boat and the Squall still goes to the Wreck pile.
+
+8.3     The marker stays on mark five once it arrives there.
+
+9.      Solo Play
+
+9.1     One person may play against an automated opponent.
+
+9.2     On the automated opponent's turn, reveal the top card of the
+        Stock and follow the table printed on that card.
+
+9.3     The automated opponent never plays Squall cards.
+
+9.4     The automated opponent never launches more than one boat in a
+        turn.
+
+
+                                 - 8 -
+

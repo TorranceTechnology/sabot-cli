@@ -1,0 +1,7 @@
+Be the first player to bank enough cargo. In the Short Tide that means ten points. In the Full Tide it means twenty points.
+
+Each turn you refill your hand and then launch a boat. Load cargo onto your boats, but never more than a boat can carry. Sail a loaded boat out to bank its points. When your turn ends the tide rises.
+
+A squall can beach a boat and spill its cargo. A buoyant boat shrugs off any squall.
+
+Driftwood quick start, page one

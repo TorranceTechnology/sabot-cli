@@ -1,0 +1,69 @@
+# Overview
+
+Driftwood is a duel between two harbours. Each player launches boats, piles cargo aboard and sails out to collect points, while a shared tide and a handful of squalls complicate the plan.
+
+# Cards
+
+## Boats
+
+A boat card shows how much weight it can carry. Boats stay in your harbour until they sail out or are wrecked.
+
+## Cargo
+
+A cargo card shows its weight. Cargo is loaded onto a boat and scores points when that boat sails out.
+
+## Squalls
+
+A squall card shows a storm and no numbers. It is played from the hand to beach an opposing boat.
+
+# Places
+
+## Stock
+
+The stock is the shared face-down pile. Nobody looks at it.
+
+## Hand
+
+Your hand is private. Keep no more than seven cards in it at the end of your turn.
+
+## Harbour
+
+The harbour is the public area where your boats and their cargo lie.
+
+## Wreck pile
+
+Spent cards go to the shared wreck pile, face up.
+
+# The turn
+
+A turn is four phases long. The player taking the turn performs them all.
+
+## Ebb
+
+1. Draw from the stock until you hold five cards.
+2. If the stock has run out, shuffle the wreck pile face down and use it as the new stock.
+
+## Sail
+
+You may launch one boat by discarding a card from your hand. You may load cargo onto your boats. You may sail a loaded boat out.
+
+## Flood
+
+1. Move the tide marker up one mark, wrapping from the top mark to the bottom mark.
+2. Starting with the player who is not taking the turn, each player may play one squall or pass.
+3. When both players pass in a row, the phase ends.
+
+## Moor
+
+1. Discard down to seven cards.
+2. Hand the turn to the other player.
+
+# Boats and weight
+
+A boat whose cargo outweighs its capacity is wrecked at once, together with everything aboard. Sailing out scores one point per unit of weight carried.
+
+# Winning
+
+1. In the Short Tide, ten points win the game.
+2. In the Full Tide, twenty points win the game.
+3. The game ends the moment a player reaches the target.
