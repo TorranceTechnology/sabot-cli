@@ -47,7 +47,9 @@ def register(subparsers: Subparsers) -> None:
         action="append",
         default=[],
         metavar="EXPR",
-        help="property filter: key=value, key!=value, key~text, has:key, missing:key",
+        help="property filter: key=value, key!=value, key~text, has:key, missing:key; "
+        "conditions on one property (including --type and --status) are alternatives, "
+        "conditions on different properties must all hold",
     )
     parser.add_argument("--fields", metavar="F,F", help="extra properties to include in each row")
     parser.add_argument(

@@ -128,8 +128,9 @@ def load_ruleset(root: Path) -> Ruleset:
     """Read and structurally validate `<root>/_ruleset.yaml`.
 
     Raises `RulesetError` with code `not-a-vault` when the file is absent and `ruleset-invalid`
-    when it is unreadable or does not have the shape of section 5.6. Whether the declarations
-    make sense against the schema is a separate question, answered by `ruleset_problems`.
+    when it is unreadable or does not have the shape described in docs/schema-v1.md. Whether
+    the declarations make sense against the schema is a separate question, answered by
+    `ruleset_problems`.
     """
     path = root / RULESET_FILE
     if not path.is_file():

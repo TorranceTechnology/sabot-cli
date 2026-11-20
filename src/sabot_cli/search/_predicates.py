@@ -33,24 +33,29 @@ class _Filter:
 def query(
     vault: Vault, types: Sequence[str], statuses: Sequence[str], where: Sequence[str]
 ) -> tuple[Note, ...]:
-    """The notes passing every kind of filter given, sorted by id.
+    """The notes passing the filters, sorted by id.
 
-    Repeated filters of one kind are alternatives; different kinds must all pass. A kind that
-    was not given does not restrict. A link-valued property compares by target id, a list
-    property by its items, and a property holding nothing (absent, null or an empty list) is
-    absent: `key!=value` accepts it, `key=value`, `key~text` and `has:key` do not.
+    Conditions on one property are alternatives and conditions on different properties must
+    all hold. `types` and `statuses` are conditions on the properties `type` and `status`, so
+    they combine with a `where` expression on the same property by the same rule; `has:key` and
+    `missing:key` are conditions on `key`. No condition at all does not restrict. A
+    link-valued property compares by target id, a list property by its items, and a property
+    holding nothing (absent, null or an empty list) is absent: `key!=value` accepts it,
+    `key=value`, `key~text` and `has:key` do not.
     Raises `InvalidFilterError` for an expression that is not one of the supported forms.
     """
-    kinds = [
-        [_Filter("type", _Operator.EQUALS, value) for value in types],
-        [_Filter("status", _Operator.EQUALS, value) for value in statuses],
-        [_parse(expression) for expression in where],
+    conditions = [
+        *(_Filter("type", _Operator.EQUALS, value) for value in types),
+        *(_Filter("status", _Operator.EQUALS, value) for value in statuses),
+        *(_parse(expression) for expression in where),
     ]
-    required = [kind for kind in kinds if kind]
+    by_property: dict[str, list[_Filter]] = {}
+    for condition in conditions:
+        by_property.setdefault(condition.key, []).append(condition)
     passing = (
         note
         for note in vault.notes.values()
-        if all(any(_holds(note, one) for one in kind) for kind in required)
+        if all(any(_holds(note, one) for one in group) for group in by_property.values())
     )
     return tuple(sorted(passing, key=lambda note: note.id))
 

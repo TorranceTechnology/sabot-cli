@@ -1,9 +1,7 @@
-"""Options and refusals that more than one command declares."""
+"""Options that more than one command declares."""
 
 import argparse
 from pathlib import Path
-
-from sabot_cli.output import refuse
 
 # argparse exposes no public name for the object add_subparsers returns.
 type Subparsers = argparse._SubParsersAction[argparse.ArgumentParser]
@@ -24,14 +22,4 @@ def add_vault_option(parser: argparse.ArgumentParser, *, optional: bool = False)
         help="vault directory (default: the current directory)"
         if not optional
         else "vault directory whose extensions are merged in (default: none)",
-    )
-
-
-def refuse_not_implemented(name: str, args: argparse.Namespace) -> int:
-    """Exit 3 with the not-implemented error; the body of every command stub."""
-    return refuse(
-        name,
-        "not-implemented",
-        f"the {name} command is not implemented yet",
-        as_json=bool(args.json),
     )

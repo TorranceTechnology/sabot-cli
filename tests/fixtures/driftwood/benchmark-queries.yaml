@@ -19,7 +19,7 @@ queries:
   group: front-matter
   command: search
   args: [--type, clause, --status, derived, --status, superseded]
-  description: 'Repeated options of one kind are ORed: clauses that are derived or superseded.'
+  description: 'Repeated conditions on one property are ORed: clauses that are derived or superseded.'
   expect:
     order: exact
     ids: [cl.hand-limit-draft, cl.tide-wrap-decision]

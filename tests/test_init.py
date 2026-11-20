@@ -16,19 +16,7 @@ def _snapshot(directory: Path) -> dict[str, bytes]:
 
 
 def _assert_lint_is_clean(run_cli: CliRunner, vault: Path) -> None:
-    """Lint a vault and expect no findings.
-
-    `lint` is a stub until its implementer lands it. While it is, the same question is put to
-    the lint seam inside `compile`, which refuses a vault with errors; once `lint` runs this
-    branch uses it and the seam test in `test_compile.py` has already forced the switch.
-    """
     lint = run_cli("lint", "--vault", str(vault), "--json")
-    if lint.returncode == 3 and lint.json().get("error", {}) == {  # type: ignore[comparison-overlap]
-        "code": "not-implemented",
-        "message": "the lint command is not implemented yet",
-    }:
-        assert run_cli("compile", "--vault", str(vault), "--json").returncode == 0
-        return
     assert lint.returncode == 0
     assert lint.json()["findings"] == []
 

@@ -122,20 +122,99 @@ def test_not_equal_accepts_a_note_that_lacks_the_property(
     assert result_ids(result) == ["b", "c"]
 
 
-def test_repeated_filters_of_one_kind_are_alternatives_and_kinds_combine(
-    run_cli: CliRunner, driftwood_vault: Path
+def test_two_conditions_on_one_property_are_alternatives(
+    run_cli: CliRunner, tmp_path: Path
 ) -> None:
-    # Given zones and clauses that are both tagged or untagged
-    either = _search(run_cli, driftwood_vault, "--where", "tags=cargo", "--where", "tags=hand")
-    narrowed = _search(
-        run_cli, driftwood_vault, "--where", "tags=cargo", "--where", "tags=hand", "--type", "zone"
+    # Given notes with three different `kind` values
+    vault = write_vault(
+        tmp_path / "vault",
+        [
+            NoteSpec("a", "A", extra={"kind": "x"}),
+            NoteSpec("b", "B", extra={"kind": "y"}),
+            NoteSpec("c", "C", extra={"kind": "z"}),
+        ],
     )
 
-    # Then two --where options give the union, and adding --type keeps only that type
-    assert {"ct.cargo", "cl.hand-limit"} <= set(result_ids(either))
-    assert result_ids(narrowed) == [
-        note_id for note_id in result_ids(either) if str(note_id).startswith("zone.")
-    ]
+    # When two --where options name the same property
+    result = _search(run_cli, vault, "--where", "kind=x", "--where", "kind=y")
+
+    # Then a note matching either value is returned
+    assert result_ids(result) == ["a", "b"]
+
+
+def test_conditions_on_different_properties_must_all_hold(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given notes that differ in two properties
+    vault = write_vault(
+        tmp_path / "vault",
+        [
+            NoteSpec("a", "A", extra={"kind": "x", "side": "left"}),
+            NoteSpec("b", "B", extra={"kind": "x", "side": "right"}),
+            NoteSpec("c", "C", extra={"kind": "y", "side": "left"}),
+        ],
+    )
+
+    # When --where options name different properties
+    result = _search(run_cli, vault, "--where", "kind=x", "--where", "side=left")
+
+    # Then only the note meeting both is returned
+    assert result_ids(result) == ["a"]
+
+
+def test_type_and_a_where_on_type_are_alternatives(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given the fixture vault, with one keyword and many clauses
+    # When --type clause is combined with a where condition on the type property
+    result = _search(
+        run_cli,
+        driftwood_vault,
+        "--type",
+        "clause",
+        "--where",
+        "type=keyword",
+        "--status",
+        "refused",
+    )
+
+    # Then the type conditions are ORed and the status condition ANDed
+    assert result_ids(result) == ["cl.solo-refused"]
+    either = _search(run_cli, driftwood_vault, "--type", "clause", "--where", "type=keyword")
+    assert "kw.buoyant" in result_ids(either)
+    assert "cl.layout" in result_ids(either)
+
+
+def test_type_and_a_where_on_another_property_are_both_required(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given clauses with several statuses
+    # When --type is combined with a where condition on status
+    result = _search(run_cli, driftwood_vault, "--type", "clause", "--where", "status=refused")
+
+    # Then only refused clauses are returned
+    assert result_ids(result) == ["cl.solo-refused"]
+
+
+def test_equals_and_not_equals_on_one_property_are_alternatives(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given notes whose `key` is a, b, c or absent
+    vault = write_vault(
+        tmp_path / "vault",
+        [
+            NoteSpec("n1", "N1", extra={"key": "a"}),
+            NoteSpec("n2", "N2", extra={"key": "b"}),
+            NoteSpec("n3", "N3", extra={"key": "c"}),
+            NoteSpec("n4", "N4"),
+        ],
+    )
+
+    # When key=a and key!=b are both given
+    result = _search(run_cli, vault, "--where", "key=a", "--where", "key!=b")
+
+    # Then a note passes if it equals a or does not equal b, so only b is left out
+    assert result_ids(result) == ["n1", "n3", "n4"]
 
 
 def test_search_skips_and_names_an_unparseable_note(
