@@ -316,6 +316,13 @@ def test_a_wikilink_in_code_is_not_a_body_link(
         pytest.param(f"> {_LONG_WORDS}", True, id="block-quote-one-line"),
         pytest.param(f"> {_LONG_WORDS[:36]}\n> {_LONG_WORDS[37:]}", True, id="block-quote-wrapped"),
         pytest.param("> a short quoted line", False, id="short-block-quote"),
+        pytest.param(f"> [!note] {_LONG_WORDS}", False, id="callout-one-line"),
+        pytest.param(
+            f"> [!warning] Mind this\n> {_LONG_WORDS}", False, id="callout-with-a-long-body"
+        ),
+        pytest.param(
+            f"> [!] {_LONG_WORDS}", True, id="a-block-quote-that-only-looks-like-a-callout"
+        ),
         pytest.param(f'"{_LONG_WORDS}"', True, id="straight-double-quotes"),
         pytest.param(f"{_LEFT_DOUBLE}{_LONG_WORDS}{_RIGHT_DOUBLE}", True, id="curly-double-quotes"),
     ],

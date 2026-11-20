@@ -5,11 +5,17 @@ from dataclasses import dataclass
 
 from sabot_cli.canonical import JsonValue
 from sabot_cli.sources import _boundaries, _builders
-from sabot_cli.sources._items import Item
+from sabot_cli.sources._items import Continuation, Item
 from sabot_cli.sources._lines import JoinedText, LineIndex
 from sabot_cli.sources._normalise import LEADING_NUMBER, digest, editorial, normalise
 from sabot_cli.sources._records import SpanRecord, span_file_text
-from sabot_cli.sources._self_checks import SELF_CHECKS, CheckResult, merge, run_self_checks
+from sabot_cli.sources._self_checks import (
+    NUMBERED_CONTINUATIONS,
+    SELF_CHECKS,
+    CheckResult,
+    merge,
+    run_self_checks,
+)
 from sabot_cli.sources._sentences import split_sentences
 from sabot_cli.sources._spanref import sentence_locator
 from sabot_cli.sources._types import (
@@ -29,11 +35,15 @@ class SegmentResult:
     records: tuple[SpanRecord, ...]
     checks: tuple[CheckResult, ...]
     boundary_records: tuple[dict[str, JsonValue], ...] = ()
+    continuations: tuple[Continuation, ...] = ()
 
     @property
     def ok(self) -> bool:
-        """Whether every check passed; only then may a span file be written."""
-        return all(check.passed for check in self.checks)
+        """Whether no check found a failure; only then may a span file be written.
+
+        A notice, which an advisory check raises, does not count as a failure.
+        """
+        return not any(check.blocks for check in self.checks)
 
     @property
     def span_count(self) -> int:
@@ -64,6 +74,7 @@ def segment(
     skip_pages: int = 0,
     *,
     boundaries: str | None = None,
+    strict_numbering: bool = False,
 ) -> SegmentResult:
     """Segment extracted text into span records; no file is written here.
 
@@ -71,6 +82,9 @@ def segment(
     feeds): text without them is one page, which a skip would discard whole. `boundaries` is the
     text of a boundaries file and is required, and only used, in `boundaries` mode. A refused
     input raises `SourceError`; a result whose checks fail is returned with its findings.
+    `numbered` and `headings` modes read a numbered line as a continuation of the rule before it
+    in some cases; each is listed in `continuations` and raised as the `numbered-continuations`
+    check, a notice unless `strict_numbering` makes it a failure.
     """
     check_key(source_key)
     if skip_pages < 0:
@@ -84,6 +98,7 @@ def segment(
         skip_pages = 0
     items: Sequence[Item]
     skips: Sequence[_boundaries.Skip]
+    continuations: Sequence[Continuation] = ()
     if mode == "boundaries":
         assert boundaries is not None  # the mismatch check above refused every other case
         plan, findings = _boundaries.check_boundaries(boundaries, index)
@@ -91,49 +106,44 @@ def segment(
             return SegmentResult(source_key, mode, (), _boundary_checks(findings))
         items, skips = plan.items, plan.skips
     else:
-        items = _build_items(index, mode, numbering, skip_pages)
+        items, continuations = _build_items(index, mode, numbering, skip_pages)
         skips = _boundaries.derive_skips(items, index)
     records = _records(source_key, items, index)
     checks = merge(
         _boundary_checks([]) if mode == "boundaries" else (),
         run_self_checks(records),
-        (_rule_text_check(index, items, mode, numbering, skip_pages),),
+        (_continuation_check(continuations, strict=strict_numbering),),
     )
-    return SegmentResult(source_key, mode, records, checks, _boundaries.emit_records(items, skips))
-
-
-def _rule_text_check(
-    index: LineIndex,
-    items: Sequence[Item],
-    mode: SegmentMode,
-    numbering: Numbering,
-    skip_pages: int,
-) -> CheckResult:
-    """Every line that begins with a rule number must have its text in some span.
-
-    Only the modes that read rule numbers are held to it; a boundaries file or a sentence split
-    does not claim to follow the numbering.
-    """
-    if mode not in ("numbered", "headings"):
-        return CheckResult("rule-text-unspanned")
-    missing = _builders.unspanned_rule_lines(
-        index,
-        items,
-        numbering,
-        skip_pages=skip_pages if mode == "numbered" else 0,
-        after_first_item=mode == "headings",
+    return SegmentResult(
+        source_key,
+        mode,
+        records,
+        checks,
+        _boundaries.emit_records(items, skips),
+        tuple(continuations),
     )
-    return CheckResult("rule-text-unspanned", missing)
+
+
+def _continuation_check(continuations: Sequence[Continuation], *, strict: bool) -> CheckResult:
+    """Every numbered line read as part of the rule before it, for a person to look at."""
+    return CheckResult(
+        NUMBERED_CONTINUATIONS,
+        tuple(
+            f"line {found.line}: {found.number} read as text of {found.span}"
+            for found in continuations
+        ),
+        advisory=not strict,
+    )
 
 
 def _build_items(
     index: LineIndex, mode: SegmentMode, numbering: Numbering, skip_pages: int
-) -> list[Item]:
+) -> tuple[list[Item], list[Continuation]]:
     if mode == "numbered":
         return _builders.numbered(index, numbering, skip_pages)
     if mode == "headings":
         return _builders.headings(index, numbering)
-    return _builders.sentences(index)
+    return _builders.sentences(index), []
 
 
 def _boundary_checks(findings: Sequence[_boundaries.Finding]) -> tuple[CheckResult, ...]:

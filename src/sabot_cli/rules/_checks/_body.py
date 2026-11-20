@@ -11,6 +11,8 @@ QUOTATION_LIMIT = 60
 _QUOTED = re.compile(r'"([^"]*)"|\u201c([^\u201d]*)\u201d|\u2018([^\u2019]*)\u2019')
 _BLANK_LINE = re.compile(r"\n\s*\n")
 _BLOCKQUOTE_LINE = re.compile(r"^\s{0,3}>\s?")
+# An Obsidian callout is a block quote whose first line names its kind, as in `> [!note] Title`.
+_CALLOUT_OPENING = re.compile(r"^\[![A-Za-z]")
 _FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 _INLINE_CODE = re.compile(r"`[^`\n]*`")
 
@@ -22,8 +24,9 @@ def _check_quotation_long(ctx: LintContext) -> Iterator[Report]:
             quoted = [line for line in lines if _BLOCKQUOTE_LINE.match(line)]
             others = [line for line in lines if not _BLOCKQUOTE_LINE.match(line)]
             lengths = []
-            if quoted:
-                # A block quote is one quotation however it is wrapped.
+            if quoted and not _CALLOUT_OPENING.match(_BLOCKQUOTE_LINE.sub("", quoted[0]).lstrip()):
+                # A block quote is one quotation however it is wrapped. A callout is the
+                # author's own note set apart, not a quotation.
                 block = " ".join(_BLOCKQUOTE_LINE.sub("", line).strip() for line in quoted)
                 lengths.append(len(" ".join(block.split())))
             # A quote is looked for within one paragraph so a stray mark cannot pair with a

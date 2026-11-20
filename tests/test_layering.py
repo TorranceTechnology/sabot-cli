@@ -128,3 +128,53 @@ def test_every_exported_name_is_used_by_a_caller(package: str) -> None:
 
     # Then every exported name is imported by name somewhere, so the surface holds no extras
     assert sorted(exported - imported) == []
+
+
+def _private_imports(source: Path) -> list[str]:
+    """Names a module imports from `sabot_cli` whose own name starts with an underscore."""
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and node.module.split(".")[0] == ("sabot_cli")
+        ):
+            parts = [*node.module.split("."), *(alias.name for alias in node.names)]
+            found += [part for part in parts if part.startswith("_")]
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == "sabot_cli":
+                    found += [part for part in alias.name.split(".") if part.startswith("_")]
+    return found
+
+
+def test_no_test_imports_a_module_or_name_of_the_package_that_starts_with_an_underscore() -> None:
+    # Given every test module
+    # When the names they import from `sabot_cli` are read
+    found = {
+        source.name: private
+        for source in sorted(Path(__file__).parent.rglob("*.py"))
+        if (private := _private_imports(source))
+    }
+
+    # Then none is private: what a test needs from inside is exposed by `sabot_cli.testing`
+    assert found == {}
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "from sabot_cli.vault import _walk",
+        "from sabot_cli.vault._yaml import load",
+        "import sabot_cli.vault._walk",
+        "from sabot_cli.vault.transaction import _Journal",
+    ],
+)
+def test_the_private_import_check_flags_each_form(statement: str, tmp_path: Path) -> None:
+    # Given a module with one import of something private
+    source = tmp_path / "leaky.py"
+    source.write_text(statement + "\n", encoding="utf-8")
+
+    # When it is checked
+    # Then the import is reported
+    assert _private_imports(source), f"{statement!r} was not flagged"

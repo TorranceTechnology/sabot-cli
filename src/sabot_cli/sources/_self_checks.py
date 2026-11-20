@@ -15,22 +15,40 @@ SELF_CHECKS: tuple[str, ...] = (
     "no-spans",
     "non-monotone",
     "page-decreasing",
-    "rule-text-unspanned",
 )
+
+# A check that reports what a person should look at without stopping the run.
+NUMBERED_CONTINUATIONS = "numbered-continuations"
 _NUMBER_KEY = re.compile(r"^(\d+(?:\.\d+)*)([a-z]?)$")
 
 
 @dataclass(frozen=True)
 class CheckResult:
-    """One named check: it passed when it has no failures; each failure names a place."""
+    """One named check: it passed when it has no failures; each failure names a place.
+
+    An `advisory` check that found something is a notice: it is listed, and the run goes on.
+    """
 
     name: str
     failures: tuple[str, ...] = ()
+    advisory: bool = False
 
     @property
     def passed(self) -> bool:
         """Whether the check found nothing."""
         return not self.failures
+
+    @property
+    def blocks(self) -> bool:
+        """Whether the check found something that stops a span file being written."""
+        return bool(self.failures) and not self.advisory
+
+    @property
+    def status(self) -> str:
+        """`passed`, `notice` (found something, advisory) or `failed`."""
+        if not self.failures:
+            return "passed"
+        return "notice" if self.advisory else "failed"
 
 
 def _number_key(locator: str) -> tuple[tuple[int, ...], str] | None:
@@ -73,9 +91,12 @@ def run_self_checks(records: Sequence[SpanRecord]) -> tuple[CheckResult, ...]:
 def merge(*groups: Sequence[CheckResult]) -> tuple[CheckResult, ...]:
     """Combine results that share a name, listing each failure once, ordered by name."""
     combined: dict[str, set[str]] = {}
+    advisory: dict[str, bool] = {}
     for group in groups:
         for result in group:
             combined.setdefault(result.name, set()).update(result.failures)
+            advisory[result.name] = advisory.get(result.name, True) and result.advisory
     return tuple(
-        CheckResult(name, tuple(sorted(found))) for name, found in sorted(combined.items())
+        CheckResult(name, tuple(sorted(found)), advisory[name])
+        for name, found in sorted(combined.items())
     )

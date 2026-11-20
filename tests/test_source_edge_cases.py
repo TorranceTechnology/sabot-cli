@@ -14,6 +14,7 @@ from source_vaults import (
     vault_with_sources,
     write_text,
 )
+from support.vault_state import vault_state
 
 BOM = b"\xef\xbb\xbf"
 
@@ -421,10 +422,10 @@ def test_a_wrapped_decimal_across_a_page_number_is_still_one_rule(
 
 
 @pytest.mark.parametrize("mode", ["numbered", "headings", "sentences"])
-def test_every_mode_reports_the_rule_text_check(
+def test_every_mode_reports_the_numbered_continuations_check(
     mode: str, run_cli: CliRunner, tmp_path: Path
 ) -> None:
-    # Given a text with numbered rules under a heading
+    # Given a text of numbered rules under a heading, none of which wraps onto another
     source = write_text(
         tmp_path / "rules.txt", "# Hand\n4.1 A limit of cards applies.\n4.2 It counts.\n"
     )
@@ -433,14 +434,137 @@ def test_every_mode_reports_the_rule_text_check(
     # When it is segmented in a mode
     code, document = _segment(run_cli, vault, source, mode)
 
-    # Then the rule-text check is among the checks and has passed: every rule is in a span
+    # Then the check is listed and passed, and no continuation is reported
     checks = {check["name"]: check for check in document["checks"]}  # type: ignore[attr-defined, union-attr]
     assert code == 0
-    assert checks["rule-text-unspanned"] == {
+    assert checks["numbered-continuations"] == {
         "failures": [],
-        "name": "rule-text-unspanned",
+        "name": "numbered-continuations",
         "status": "passed",
     }
+    assert document["continuations"] == []
+    assert "rule-text-unspanned" not in checks
+
+
+@pytest.mark.parametrize(
+    ("text", "numbering", "spans", "continuations"),
+    [
+        pytest.param(
+            "2. Damage\n2.4 The attacker deals damage multiplied by\n"
+            "2.5 times the defense of the target.\n3. Next\n3.1 Later.\n",
+            "dotted",
+            ["2", "2.4", "2.5", "3", "3.1"],
+            [],
+            id="a wrapped decimal that is the next sibling is split as a rule",
+        ),
+        pytest.param(
+            "3. Setup\n3.1 shuffle the deck\n3.3 deal five cards to each player.\n4. Play\n",
+            "dotted",
+            ["3", "3.1", "4"],
+            [{"line": 3, "number": "3.3", "span": "3.1"}],
+            id="a skipped number is read as a continuation",
+        ),
+        pytest.param(
+            "4. Combat\n4.2 Blocking\n4.2a the attacker picks\n4.2c the defender may block.\n",
+            "dotted-letter",
+            ["4", "4.2", "4.2a"],
+            [{"line": 4, "number": "4.2c", "span": "4.2a"}],
+            id="a skipped letter is read as a continuation",
+        ),
+        pytest.param(
+            "12. End\n12.4 the game ends when the last card is played.\n",
+            "dotted",
+            ["12"],
+            [{"line": 2, "number": "12.4", "span": "12"}],
+            id="a first child that is not .1 is read as a continuation",
+        ),
+        pytest.param(
+            "4. Combat\n4.2 Blocking\n4.2c The attacker picks one of\n5. their cards.\n",
+            "dotted-letter",
+            ["4", "4.2", "4.2c", "5"],
+            [],
+            id="the next sibling of an ancestor is a rule",
+        ),
+    ],
+)
+def test_each_reading_of_a_numbered_line_is_a_span_or_is_listed_as_a_continuation(
+    text: str,
+    numbering: str,
+    spans: list[str],
+    continuations: list[dict[str, object]],
+    run_cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    # Given numbered text in which a line begins with a number the heuristic must judge
+    source = write_text(tmp_path / "rules.txt", text)
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": source})
+
+    # When it is segmented
+    code, document = _segment(run_cli, vault, source, "numbered", "--numbering", numbering)
+
+    # Then the decision is pinned: the line is a span of its own, or it is listed with its
+    # line, its number and the span it joined
+    assert code == 0
+    assert _span_locators(vault) == spans
+    assert document["continuations"] == continuations
+
+
+def test_a_continuation_is_a_notice_that_lists_it_and_does_not_stop_the_run(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given text in which one numbered line reads as a continuation
+    source = write_text(tmp_path / "rules.txt", "3.1 shuffle the deck\n3.3 deal five cards.\n")
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": source})
+
+    # When it is segmented, with text output
+    result = run_cli(
+        "segment", str(source), "--source", "dw1", "--mode", "numbered", "--vault", str(vault)
+    )
+
+    # Then the span file is written, and the output names the line, the number and the span
+    assert result.returncode == 0
+    assert (vault / "spans" / "dw1.jsonl").is_file()
+    assert "check numbered-continuations: notice\n" in result.stdout
+    assert "  line 2: 3.3 read as text of 3.1\n" in result.stdout
+
+
+@pytest.mark.parametrize("mode", ["numbered", "headings"])
+def test_strict_numbering_fails_when_a_numbered_line_was_read_as_a_continuation(
+    mode: str, run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given text in which one numbered line reads as a continuation (under a heading in the
+    # headings mode)
+    source = write_text(
+        tmp_path / "rules.txt", "# Setup\n3.1 shuffle the deck\n3.3 deal five cards.\n"
+    )
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": source})
+    before = vault_state(vault)
+
+    # When it is segmented with --strict-numbering
+    code, document = _segment(run_cli, vault, source, mode, "--strict-numbering")
+
+    # Then the check fails, nothing is written and the document says what was read how
+    checks = {check["name"]: check for check in document["checks"]}  # type: ignore[attr-defined, union-attr]
+    assert code == 1
+    assert document["written"] is False
+    assert checks["numbered-continuations"]["status"] == "failed"
+    assert document["continuations"]
+    assert vault_state(vault) == before
+
+
+def test_strict_numbering_passes_when_no_numbered_line_was_read_as_a_continuation(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given text with no continuation
+    source = write_text(tmp_path / "rules.txt", "1.1 First rule.\n1.2 Second rule.\n")
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": source})
+
+    # When it is segmented with --strict-numbering
+    code, document = _segment(run_cli, vault, source, "numbered", "--strict-numbering")
+
+    # Then it succeeds
+    assert code == 0
+    assert document["written"] is True
 
 
 def test_headings_mode_numbers_a_heading_that_repeats(run_cli: CliRunner, tmp_path: Path) -> None:

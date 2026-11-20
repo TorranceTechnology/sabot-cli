@@ -171,16 +171,30 @@ def test_lint_reports_a_directory_or_file_anywhere_in_the_vault_whose_name_is_un
     assert result.returncode == 1
 
 
-def test_lint_does_not_enter_the_git_directory_for_unusable_names(
-    run_cli: CliRunner, driftwood_vault: Path
+@requires_device_file_names
+@pytest.mark.parametrize(
+    ("path", "kind"),
+    [
+        (".git/hooks/aux", "file"),
+        (".obsidian/plugins/aux", "file"),
+        (".obsidian/plugins/aux/", "directory"),
+    ],
+)
+def test_lint_does_not_enter_hidden_directories_for_unusable_names(
+    path: str, kind: str, run_cli: CliRunner, driftwood_vault: Path
 ) -> None:
-    # Given a .git directory holding a file named for a device
-    git = driftwood_vault / ".git" / "hooks"
-    git.mkdir(parents=True)
-    (git / "aux").write_bytes(b"x")
+    # Given a hidden directory (git's, or an editor's that is often ignored) holding a file or
+    # an empty directory named for a device
+    target = driftwood_vault / path
+    if kind == "directory":
+        target.mkdir(parents=True)
+    else:
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"x")
 
     # When the vault is linted
     result = run_cli("lint", "--vault", str(driftwood_vault), "--json")
 
-    # Then it is not reported
+    # Then it is not reported, and lint passes
     assert result.returncode == 0
+    assert result.json()["findings"] == []

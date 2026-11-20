@@ -44,9 +44,9 @@ class LintContext:
         self.fixed_schema = fixed_schema
         self.schema = schema
         self.ruleset = ruleset
-        self.notes: tuple[Note, ...] = tuple(
-            sorted(vault.notes.values(), key=lambda note: note.path.as_posix())
-        )
+        # The vault reader loads notes in path order, and lint sorts its findings at the end, so
+        # nothing here depends on this order being sorted again.
+        self.notes: tuple[Note, ...] = tuple(vault.notes.values())
         self._spans: dict[str, tuple[SpanIndex | None, str | None]] = {}
 
     def report(self, note: Note, message: str) -> Report:

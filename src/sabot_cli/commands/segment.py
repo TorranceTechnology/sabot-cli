@@ -63,6 +63,14 @@ def register(subparsers: Subparsers) -> None:
             "feed; text without form feeds is one page and nothing is skipped"
         ),
     )
+    parser.add_argument(
+        "--strict-numbering",
+        action="store_true",
+        help=(
+            "fail when a numbered line was read as a continuation of the rule before it "
+            "(default: list it as a notice and go on)"
+        ),
+    )
     add_vault_option(parser)
     add_json_option(parser)
 
@@ -105,6 +113,7 @@ def _segment(args: argparse.Namespace, transaction: Transaction, *, as_json: boo
             args.numbering,
             args.skip_pages,
             boundaries=boundaries,
+            strict_numbering=bool(args.strict_numbering),
         )
         updated = _updated_note(note, mode) if result.ok else None
     except RulesetError as error:
@@ -117,8 +126,19 @@ def _segment(args: argparse.Namespace, transaction: Transaction, *, as_json: boo
     try:
         emitted = _emit(emit, result)
     except OSError as error:
+        if updated is None:
+            return output.refuse(
+                NAME,
+                "write-failed",
+                f"a file could not be written: {error.strerror}",
+                as_json=as_json,
+            )
         return output.refuse(
-            NAME, "write-failed", f"a file could not be written: {error.strerror}", as_json=as_json
+            NAME,
+            "boundaries-not-written",
+            "the vault was updated, but the boundaries file could not be written: "
+            f"{error.strerror}",
+            as_json=as_json,
         )
     _report(key, mode, result, emitted=emitted, as_json=as_json)
     return int(ExitCode.OK if result.ok else ExitCode.FINDINGS)
@@ -161,7 +181,7 @@ def _check_json(check: CheckResult) -> dict[str, JsonValue]:
     return {
         "failures": list(check.failures),
         "name": check.name,
-        "status": "passed" if check.passed else "failed",
+        "status": check.status,
     }
 
 
@@ -172,6 +192,10 @@ def _report(key: str, mode: str, result: SegmentResult, *, emitted: bool, as_jso
                 "boundariesEmitted": emitted,
                 "checks": [_check_json(check) for check in result.checks],
                 "command": NAME,
+                "continuations": [
+                    {"line": found.line, "number": found.number, "span": found.span}
+                    for found in result.continuations
+                ],
                 "format": output.FORMAT_VERSION,
                 "mode": mode,
                 "path": span_file_relative(key),
@@ -191,6 +215,6 @@ def _report(key: str, mode: str, result: SegmentResult, *, emitted: bool, as_jso
 def _text_lines(result: SegmentResult) -> Sequence[str]:
     lines = [f"spans: {result.span_count}", f"sentences: {result.sentence_count}"]
     for check in result.checks:
-        lines.append(f"check {check.name}: {'passed' if check.passed else 'failed'}")
+        lines.append(f"check {check.name}: {check.status}")
         lines += [f"  {failure}" for failure in check.failures]
     return lines

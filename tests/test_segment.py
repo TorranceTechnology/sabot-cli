@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from conftest import FIXTURES, CliRunner
-from sabot_cli.vault.transaction import checkpoint_hook
+from sabot_cli.testing import checkpoint_hook
 from source_vaults import (
     error_code,
     ingest_arguments,
@@ -324,6 +324,53 @@ def test_emitted_boundaries_are_written_even_when_a_check_fails(
     assert code == 1
     assert emitted.is_file()
     assert not (vault / "spans" / "dw1.jsonl").exists()
+
+
+def test_a_boundaries_file_that_cannot_be_written_says_the_vault_was_updated(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault, and an --emit-boundaries path below a file, so it cannot be written
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
+    blocker = tmp_path / "blocker"
+    blocker.write_bytes(b"a file")
+
+    # When the segmentation succeeds in the vault but the boundaries file fails
+    result = run_cli(
+        "segment", str(RULES_E1), "--source", "dw1", "--mode", "numbered",
+        "--emit-boundaries", str(blocker / "out.boundaries.jsonl"),
+        "--vault", str(vault), "--json",
+    )  # fmt: skip
+
+    # Then the refusal has its own code and says the vault was updated, which it was
+    assert result.returncode == 3
+    assert error_code(result) == "boundaries-not-written"
+    assert "the vault was updated" in result.stdout
+    assert (vault / "spans" / "dw1.jsonl").is_file()
+
+
+def test_a_boundaries_file_that_cannot_be_written_after_a_failed_check_is_a_plain_write_failure(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a failing segmentation (a duplicated rule number) and an unwritable emit path
+    work = tmp_path / "work"
+    work.mkdir()
+    shutil.copy(RULES_E1, work / "rules-e1.txt")
+    plant(work, "segmenter-duplicate-locator")
+    vault = vault_with_sources(run_cli, tmp_path / "vault", {"dw1": RULES_E1})
+    blocker = tmp_path / "blocker"
+    blocker.write_bytes(b"a file")
+    before = vault_state(vault)
+
+    # When it runs
+    result = run_cli(
+        "segment", str(work / "rules-e1.txt"), "--source", "dw1", "--mode", "numbered",
+        "--emit-boundaries", str(blocker / "out.boundaries.jsonl"),
+        "--vault", str(vault), "--json",
+    )  # fmt: skip
+
+    # Then the vault was not updated, so the message is the plain one
+    assert error_code(result) == "write-failed"
+    assert vault_state(vault) == before
 
 
 def test_segment_output_is_byte_identical_across_runs(run_cli: CliRunner, tmp_path: Path) -> None:

@@ -3,10 +3,10 @@
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 
-from sabot_cli.sources._items import Item
+from sabot_cli.sources._items import Continuation, Item
 from sabot_cli.sources._lines import Line, LineIndex, is_page_furniture
 from sabot_cli.sources._normalise import digest, normalise
 from sabot_cli.sources._sentences import split_sentences
@@ -110,10 +110,21 @@ class _Open:
         )
 
 
-def numbered(index: LineIndex, numbering: Numbering, skip_pages: int) -> list[Item]:
-    """One item per numbered line, continuation lines joined; parents follow the numbers."""
+def _continuation(index: LineIndex, line: Line, number: str, span: str) -> Continuation:
+    return Continuation(index.text.count("\n", 0, line.start) + 1, number, span)
+
+
+def numbered(
+    index: LineIndex, numbering: Numbering, skip_pages: int
+) -> tuple[list[Item], list[Continuation]]:
+    """One item per numbered line, continuation lines joined; parents follow the numbers.
+
+    The second result lists each numbered line that was read as a continuation instead of a
+    rule, so the decision is visible to whoever reviews the segmentation.
+    """
     pattern = _NUMBER_START[numbering]
     opened: list[_Open] = []
+    continuations: list[Continuation] = []
     previous: str | None = None
     for line, separated in _prose_lines(index):
         if line.page <= skip_pages:
@@ -132,38 +143,17 @@ def numbered(index: LineIndex, numbering: Numbering, skip_pages: int) -> list[It
                 _Open(match.group(1).rstrip("."), None, line.page, line.text_offset, line.text_end)
             )
         elif opened:
+            if match is not None:
+                continuations.append(
+                    _continuation(index, line, match.group(1).rstrip("."), opened[-1].locator)
+                )
             opened[-1].end = line.text_end
     known = {item.locator for item in opened}
-    return [
+    items = [
         replace(item.freeze(), parent=_nearest_numbered_parent(item.locator, known))
         for item in opened
     ]
-
-
-def unspanned_rule_lines(
-    index: LineIndex,
-    items: Sequence[Item],
-    numbering: Numbering,
-    *,
-    skip_pages: int,
-    after_first_item: bool,
-) -> tuple[str, ...]:
-    """The rule numbers of lines that begin with one but whose text lies in no item.
-
-    A rule that a segmentation dropped is otherwise silent: nothing in the span file would say
-    it was ever there. Lines on skipped pages are not counted, and with `after_first_item` neither
-    are lines before the first item, which a mode that starts at a heading leaves out by design.
-    """
-    pattern = _NUMBER_START[numbering]
-    floor = min((item.start for item in items), default=0) if after_first_item else 0
-    missing: set[str] = set()
-    for line, _ in _prose_lines(index):
-        match = pattern.match(line.text)
-        if match is None or line.page <= skip_pages or line.text_offset < floor:
-            continue
-        if not any(item.start <= line.text_offset < item.end for item in items):
-            missing.add(match.group(1).rstrip("."))
-    return tuple(sorted(missing))
+    return items, continuations
 
 
 def slug(title: str) -> str:
@@ -173,10 +163,15 @@ def slug(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", folded).strip("-")
 
 
-def headings(index: LineIndex, numbering: Numbering) -> list[Item]:
-    """Items for `#` headings, with numbered lines under a heading as its children."""
+def headings(index: LineIndex, numbering: Numbering) -> tuple[list[Item], list[Continuation]]:
+    """Items for `#` headings, with numbered lines under a heading as its children.
+
+    The second result lists each numbered line that was read as a continuation, as `numbered`
+    does.
+    """
     pattern = _NUMBER_START[numbering]
     opened: list[_Open] = []
+    continuations: list[Continuation] = []
     stack: list[tuple[int, _Open]] = []
     current: _Open | None = None
     previous: str | None = None
@@ -208,13 +203,20 @@ def headings(index: LineIndex, numbering: Numbering) -> list[Item]:
         if not stack:
             continue
         number = pattern.match(line.text)
-        if number is not None and _wraps_onto(
-            previous,
-            line.text[number.end() :],
-            number=number.group(1).rstrip("."),
-            open_locator=current.locator if current is not None else None,
-            separated=separated,
+        if (
+            number is not None
+            and current is not None
+            and _wraps_onto(
+                previous,
+                line.text[number.end() :],
+                number=number.group(1).rstrip("."),
+                open_locator=current.locator,
+                separated=separated,
+            )
         ):
+            continuations.append(
+                _continuation(index, line, number.group(1).rstrip("."), current.locator)
+            )
             number = None
         previous = line.text
         if number is not None:
@@ -229,7 +231,7 @@ def headings(index: LineIndex, numbering: Numbering) -> list[Item]:
             opened.append(current)
         elif current is not None:
             current.end = line.text_end
-    return [item.freeze() for item in opened]
+    return [item.freeze() for item in opened], continuations
 
 
 def sentences(index: LineIndex) -> list[Item]:

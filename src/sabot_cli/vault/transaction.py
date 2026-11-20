@@ -17,13 +17,15 @@ then refuses with `transaction-incomplete` until `recover` rolls the journal bac
 rolls forward.
 
 A transaction creates, replaces or deletes files; a deleted file is backed up like a replaced
-one and put back by a rollback. `recover` validates every path a journal names before it
-touches anything, since a vault can arrive from elsewhere.
+one and put back by a rollback. No transaction names a hidden path: the lock and the journal are
+managed here, and are not operations of it. A vault can arrive from elsewhere, so `recover`
+trusts a journal only as far as it can check it: see `_journal.py` for what a journal may name
+and the conditions under which an undo changes a file.
 
 A lock file created with exclusive-create makes a second writer refuse with `vault-locked`. It
-records the writer's process id and host name, so that a reader can tell a write in progress
-from one that was killed. Two things are out of scope: concurrent writers that bypass this
-module, and power loss on a file system that does not order a rename against the directory
+records the writer's process id, start time and host name, so that a reader can tell a write in
+progress from one that was killed. Two things are out of scope: concurrent writers that bypass
+this module, and power loss on a file system that does not order a rename against the directory
 reaching disk.
 """
 
@@ -32,32 +34,45 @@ import errno
 import hashlib
 import json
 import os
-import re
 import shutil
 import signal
 import socket
-import sys
+import stat
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import FrameType, TracebackType
-from typing import Literal, Self, cast
+from typing import Literal, Self
 
-from sabot_cli.vault.paths import relative_within
+from sabot_cli.vault._journal import (
+    BACKUP_DIRECTORY,
+    JOURNAL_FILE,
+    JOURNAL_PREFIX,
+    STAGED_PREFIX,
+    Journal,
+    Kind,
+    Operation,
+    TransactionError,
+    is_vault_path,
+    journal_refusal,
+    plan_undo,
+    run_undo,
+    staged_name,
+    sync_directory,
+    write_synced,
+)
+from sabot_cli.vault._process import plausible_pid, process_is_alive, process_start
 from sabot_cli.vault.text import TextFileError, read_text
 
 __all__ = [
+    "JOURNAL_PREFIX",
     "LOCK_FILE",
     "WRITE_IN_PROGRESS",
-    "Checkpoint",
-    "HardStop",
-    "LockState",
     "Recovery",
     "Transaction",
     "TransactionError",
     "atomic_write",
-    "checkpoint_hook",
     "incomplete_work",
     "is_vault_path",
     "lock_state",
@@ -67,34 +82,20 @@ __all__ = [
 ]
 
 LOCK_FILE = ".sabot-lock"
-JOURNAL_PREFIX = ".sabot-txn-"
-STAGED_PREFIX = ".sabot-new-"
-_JOURNAL_FILE = "journal.json"
-_BACKUP_DIRECTORY = "backup"
 # The file that registers a vault; applied last so a vault never names a source whose files
 # are absent.
 _REGISTRATION_FILE = "_ruleset.yaml"
 _TOKEN_LENGTH = 12
-WRITE_IN_PROGRESS = "a write is in progress in this vault; try again when it has finished"
+WRITE_IN_PROGRESS = (
+    "a write is in progress in this vault; try again when it has finished, "
+    "or run sabot recover --force if no sabot process is running"
+)
 _TERMINATION_SIGNALS = ("SIGTERM", "SIGHUP", "SIGBREAK")
-_TOKEN_PATTERN = re.compile(r"[0-9a-f]{12}")
-_DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
-_BACKUP_PATTERN = re.compile(rf"{_BACKUP_DIRECTORY}/[0-9]+")
 _REMOVAL_ATTEMPTS = 5
 _REMOVAL_PAUSE_SECONDS = 0.05
 
 type Checkpoint = Callable[[str, int], None]
-type _Kind = Literal["create", "replace", "delete"]
 type _Handler = Callable[[int, FrameType | None], object] | int | signal.Handlers | None
-
-
-class TransactionError(Exception):
-    """A write was refused or undone; `code` is the refusal's error code."""
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
 
 
 class HardStop(BaseException):
@@ -111,117 +112,6 @@ class _Terminated(BaseException):
     def __init__(self, signum: int) -> None:
         super().__init__(signum)
         self.signum = signum
-
-
-@dataclass(frozen=True)
-class _Operation:
-    kind: _Kind
-    path: str
-    sha256: str
-    staged: str
-    backup: str | None
-
-
-@dataclass(frozen=True)
-class _Journal:
-    token: str
-    operations: tuple[_Operation, ...]
-    directories: tuple[str, ...]
-
-    def to_json(self) -> str:
-        document = {
-            "directories": list(self.directories),
-            "format": 1,
-            "operations": [
-                {
-                    "backup": op.backup,
-                    "kind": op.kind,
-                    "path": op.path,
-                    "sha256": op.sha256,
-                    "staged": op.staged,
-                }
-                for op in self.operations
-            ],
-            "token": self.token,
-        }
-        return json.dumps(document, sort_keys=True, indent=2) + "\n"
-
-    @classmethod
-    def from_json(cls, text: str, *, expected_token: str) -> Self:
-        """Parse and validate a journal; a journal that names anything else is refused.
-
-        `recover` acts on what a journal says, and a vault may arrive from elsewhere, so every
-        path is checked to lie inside the vault in the shape this module writes.
-        """
-        try:
-            document = json.loads(text)
-            operations = tuple(
-                _Operation(
-                    kind=cast(_Kind, _string(item["kind"])),
-                    path=_string(item["path"]),
-                    sha256=_string(item["sha256"]),
-                    staged=_string(item["staged"]),
-                    backup=None if item["backup"] is None else _string(item["backup"]),
-                )
-                for item in document["operations"]
-            )
-            directories = tuple(_string(name) for name in document["directories"])
-            journal = cls(_string(document["token"]), operations, directories)
-        except (ValueError, KeyError, TypeError) as error:
-            raise TransactionError("journal-invalid", "a journal cannot be read") from error
-        journal._validate(expected_token)
-        return journal
-
-    def _validate(self, expected_token: str) -> None:
-        if self.token != expected_token or not _TOKEN_PATTERN.fullmatch(self.token):
-            raise _journal_refusal("its token does not match its directory")
-        for name in self.directories:
-            if not is_vault_path(name):
-                raise _journal_refusal(f"it names a directory outside the vault ({name!r})")
-        for operation in self.operations:
-            self._validate_operation(operation)
-
-    def _validate_operation(self, operation: _Operation) -> None:
-        if not is_vault_path(operation.path):
-            raise _journal_refusal(f"it names a path outside the vault ({operation.path!r})")
-        target = PurePosixPath(operation.path)
-        expected = target.with_name(f"{STAGED_PREFIX}{self.token}-{target.name}")
-        if operation.staged != expected.as_posix():
-            raise _journal_refusal(f"it names a staged file that is not a copy of {operation.path}")
-        if operation.kind not in ("create", "replace", "delete"):
-            raise _journal_refusal(f"it names an unknown operation ({operation.kind!r})")
-        if not _DIGEST_PATTERN.fullmatch(operation.sha256):
-            raise _journal_refusal("it holds a malformed digest")
-        if operation.kind == "create":
-            wrong_backup = operation.backup is not None
-        else:  # replace and delete both put a backup back
-            wrong_backup = operation.backup is None or not _BACKUP_PATTERN.fullmatch(
-                operation.backup
-            )
-        if wrong_backup:
-            raise _journal_refusal(f"it names a backup it does not hold ({operation.backup!r})")
-
-
-def _string(value: object) -> str:
-    if not isinstance(value, str):
-        raise TypeError("not a string")
-    return value
-
-
-def _journal_refusal(reason: str) -> TransactionError:
-    return TransactionError("journal-invalid", f"a journal is refused: {reason}")
-
-
-def is_vault_path(relative: str) -> bool:
-    """Whether `relative` is a non-empty relative POSIX path of plain names inside a vault."""
-    path = PurePosixPath(relative)
-    return not (
-        not relative
-        or path.is_absolute()
-        or "\\" in relative
-        or ":" in relative
-        or any(part in ("", ".", "..") or part.startswith(".sabot-") for part in path.parts)
-    )
 
 
 @dataclass(frozen=True)
@@ -258,50 +148,26 @@ def _notify(phase: str, index: int) -> None:
         _checkpoint(phase, index)
 
 
-def _sync_directory(path: Path) -> None:
-    """Flush a directory's entries to disk where the platform allows it; elsewhere a no-op."""
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(descriptor)
-    except OSError:
-        pass
-    finally:
-        os.close(descriptor)
-
-
-def _write_synced(path: Path, data: bytes) -> None:
-    with path.open("wb") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
 def _token_of(entries: list[tuple[str, str]]) -> str:
     encoded = json.dumps(entries, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:_TOKEN_LENGTH]
 
 
-def _staged_name(token: str, target: Path) -> Path:
-    return target.with_name(f"{STAGED_PREFIX}{token}-{target.name}")
-
-
 def atomic_write(path: Path, data: bytes) -> None:
     """Write one file outside any vault by staging a hidden sibling and renaming it over `path`.
 
-    Missing parent directories are created. The staged file is removed on failure.
+    Missing parent directories are created. The staged file is removed on failure. A file
+    already at `path` is replaced.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    staged = _staged_name(_token_of([(path.name, hashlib.sha256(data).hexdigest())]), path)
+    staged = staged_name(_token_of([(path.name, hashlib.sha256(data).hexdigest())]), path)
     try:
-        _write_synced(staged, data)
+        write_synced(staged, data)
         os.replace(staged, path)
     except BaseException:
         staged.unlink(missing_ok=True)
         raise
-    _sync_directory(path.parent)
+    sync_directory(path.parent)
 
 
 def pending_journals(root: Path) -> tuple[str, ...]:
@@ -327,7 +193,7 @@ def _journal_directories(root: Path) -> tuple[str, ...]:
 
 
 def _has_record(journal_directory: Path) -> bool:
-    return (journal_directory / _JOURNAL_FILE).is_file()
+    return (journal_directory / JOURNAL_FILE).is_file()
 
 
 def _staged_files(root: Path) -> tuple[str, ...]:
@@ -360,8 +226,10 @@ def lock_state(root: Path) -> LockState:
     """What the write lock of a vault says about whoever holds it.
 
     `none`: no lock. `live`: the process that wrote it is running on this host. `stale`: that
-    process is gone. `other`: it was written on another host or cannot be read, so whether its
-    writer is running cannot be told.
+    process is gone, or its id now belongs to a process that started at another time. `other`:
+    it was written on another host, or cannot be read or understood, so whether its writer is
+    running cannot be told. When the lock records a start time and the running process's start
+    time cannot be read, the lock is `live`: a lock is never judged stale on a guess.
     """
     try:
         text = (root / LOCK_FILE).read_text(encoding="utf-8")
@@ -372,11 +240,25 @@ def lock_state(root: Path) -> LockState:
     try:
         document = json.loads(text)
         pid, host = document["pid"], document["host"]
-    except (ValueError, KeyError, TypeError):
+        start = document.get("start")
+    except (ValueError, KeyError, TypeError, AttributeError):
         return "other"
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or host != _host_name():
+    if not isinstance(pid, int) or isinstance(pid, bool) or not plausible_pid(pid):
         return "other"
-    return "live" if _process_is_alive(pid) else "stale"
+    if host != _host_name():
+        return "other"
+    if start is not None and not isinstance(start, str):
+        return "other"
+    try:
+        if not process_is_alive(pid):
+            return "stale"
+    except (OverflowError, ValueError):
+        return "other"
+    if start is not None:
+        current = process_start(pid)
+        if current is not None and current != start:
+            return "stale"
+    return "live"
 
 
 def write_in_progress(root: Path) -> bool:
@@ -388,87 +270,10 @@ def _host_name() -> str:
     return socket.gethostname()
 
 
-def _process_is_alive(pid: int) -> bool:
-    """Whether process `pid` exists on this host; True when that cannot be told."""
-    if sys.platform == "win32":
-        return _windows_process_is_alive(pid)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        # The process exists but belongs to someone else, or the platform declines to say.
-        return True
-    return True
-
-
-def _windows_process_is_alive(pid: int) -> bool:
-    if sys.platform != "win32":
-        return True
-    import ctypes
-
-    # `os.kill(pid, 0)` is not a probe on Windows: it terminates the process.
-    still_active, invalid_parameter, query_limited = 259, 87, 0x1000
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
-    kernel32.OpenProcess.restype = ctypes.c_void_p
-    kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
-    kernel32.GetExitCodeProcess.restype = ctypes.c_int
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    handle = kernel32.OpenProcess(query_limited, 0, pid)
-    if not handle:
-        return ctypes.get_last_error() != invalid_parameter
-    try:
-        code = ctypes.c_ulong()
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-            return True
-        return code.value == still_active
-    finally:
-        kernel32.CloseHandle(handle)
-
-
-def _undo(root: Path, journal: _Journal, journal_directory: Path) -> list[str]:
-    """Undo a journal's operations in reverse and remove the journal; return what failed."""
-    problems: list[str] = []
-    for operation in reversed(journal.operations):
-        target, staged = root / operation.path, root / operation.staged
-        try:
-            if relative_within(target.parent, root) is None:
-                problems.append(f"{operation.path}: lies outside the vault through a link")
-                continue
-            if operation.kind == "create":
-                target.unlink(missing_ok=True)
-            else:
-                _restore(journal_directory, operation, target, staged, problems)
-            staged.unlink(missing_ok=True)
-        except OSError as error:
-            problems.append(f"{operation.path}: {error.strerror}")
-    for name in reversed(journal.directories):
-        with contextlib.suppress(OSError):
-            (root / name).rmdir()
-    if not problems:
-        _discard(journal_directory)
-    return problems
-
-
-def _restore(
-    journal_directory: Path, operation: _Operation, target: Path, staged: Path, problems: list[str]
-) -> None:
-    backup = None if operation.backup is None else journal_directory / operation.backup
-    if backup is None or backup.is_symlink() or not backup.is_file():
-        problems.append(f"{operation.path}: its backup is missing")
-        return
-    # The staged copy inherited the target's mode, which may forbid writing it again.
-    staged.unlink(missing_ok=True)
-    shutil.copyfile(backup, staged)
-    shutil.copymode(backup, staged)
-    os.replace(staged, target)
-
-
 def _discard(journal_directory: Path) -> None:
     """Remove a journal; deleting `journal.json` first is what marks it settled."""
     with contextlib.suppress(FileNotFoundError):
-        (journal_directory / _JOURNAL_FILE).unlink()
+        (journal_directory / JOURNAL_FILE).unlink()
     _remove_tree(journal_directory)
 
 
@@ -503,7 +308,9 @@ def recover(root: Path, *, force: bool = False) -> Recovery:
     A journal is undone, never completed. Staged files without a journal are removed. A lock
     held by a live process of this host is refused, as is one whose writer cannot be told
     (another host's, or unreadable), unless `force`; a lock whose process is gone is cleared.
-    Every journal is read and validated before anything is changed.
+    A journal written on another host is refused unless `force`. Every journal is read, checked
+    against the files it names, and planned before anything is changed: if one operation cannot
+    be verified, nothing is changed and the refusal says which.
     """
     if not root.is_dir():
         raise TransactionError("not-a-vault", f"the directory has no {_REGISTRATION_FILE}")
@@ -518,22 +325,23 @@ def recover(root: Path, *, force: bool = False) -> Recovery:
             "the write lock was left by another host or cannot be read, so whether a write is "
             "running cannot be told; use --force once you know none is",
         )
-    journals = []
-    for name in pending_journals(root):
-        journal_file = root / name / _JOURNAL_FILE
-        try:
-            text = read_text(journal_file)
-        except TextFileError as error:
-            raise TransactionError("journal-invalid", f"{name} cannot be read") from error
-        token = name.removeprefix(JOURNAL_PREFIX)
-        journals.append((name, _Journal.from_json(text, expected_token=token)))
+    journals = [(name, _read_journal(root, name, force=force)) for name in pending_journals(root)]
+    _refuse_shared_files(journals)
+    plans = [(name, plan_undo(root, root / name, journal)) for name, journal in journals]
+    for name, plan in plans:
+        if plan.problems:
+            raise TransactionError(
+                "recovery-failed",
+                f"{name} was not rolled back, and nothing was changed: {plan.problems[0]}",
+            )
     rolled_back: list[str] = []
-    for name, journal in journals:
-        problems = _undo(root, journal, root / name)
+    for name, plan in plans:
+        problems = run_undo(plan)
         if problems:
             raise TransactionError(
                 "recovery-failed", f"{name} could not be fully rolled back: {problems[0]}"
             )
+        _discard(root / name)
         rolled_back.append(name)
     _settle_committed(root)
     removed = _staged_files(root)
@@ -541,8 +349,38 @@ def recover(root: Path, *, force: bool = False) -> Recovery:
         (root / relative).unlink(missing_ok=True)
     lock = root / LOCK_FILE
     cleared = lock.is_file()
-    lock.unlink(missing_ok=True)
+    if lock.is_file() or lock.is_symlink():
+        lock.unlink()
     return Recovery(tuple(rolled_back), removed, cleared)
+
+
+def _read_journal(root: Path, name: str, *, force: bool) -> Journal:
+    directory = root / name
+    journal_file = directory / JOURNAL_FILE
+    if directory.is_symlink() or journal_file.is_symlink():
+        raise journal_refusal(f"{name} is a link, which a write of this tool never leaves")
+    if (directory / BACKUP_DIRECTORY).is_symlink():
+        raise journal_refusal(f"the backup directory of {name} is a link")
+    try:
+        text = read_text(journal_file)
+    except TextFileError as error:
+        raise TransactionError("journal-invalid", f"{name} cannot be read") from error
+    journal = Journal.from_json(text, expected_token=name.removeprefix(JOURNAL_PREFIX))
+    if journal.host != _host_name() and not force:
+        raise TransactionError(
+            "journal-other-host",
+            f"{name} was written on another host ({journal.host!r}); review what it names, "
+            "then use --force",
+        )
+    return journal
+
+
+def _refuse_shared_files(journals: list[tuple[str, Journal]]) -> None:
+    owner: dict[str, str] = {}
+    for name, journal in journals:
+        for operation in journal.operations:
+            if owner.setdefault(operation.path, name) != name:
+                raise journal_refusal(f"{owner[operation.path]} and {name} name the same file")
 
 
 class _SignalDeferral:
@@ -622,7 +460,7 @@ class Transaction:
         self._past_commit_point = False
         self._outcome: _Outcome = "unchanged"
         self._previous_handlers: dict[int, _Handler] = {}
-        self._journal: _Journal | None = None
+        self._journal: Journal | None = None
         self._journal_directory: Path | None = None
 
     def __enter__(self) -> Self:
@@ -667,7 +505,7 @@ class Transaction:
         return False
 
     def _interrupted_message(self) -> str:
-        if self._committed:
+        if self._committed or self._past_commit_point:
             return (
                 "the run was interrupted after the write was complete; the vault holds the result"
             )
@@ -740,8 +578,14 @@ class Transaction:
         for parts in chains:
             for depth in range(1, len(parts) + 1):
                 name = "/".join(parts[:depth])
-                if not (self._root / name).is_dir():
-                    wanted.add(name)
+                directory = self._root / name
+                if directory.is_dir():
+                    continue
+                if directory.exists():
+                    # A file where a directory is wanted would make `mkdir` fail after the
+                    # journal exists; refuse before there is one.
+                    raise NotADirectoryError(errno.ENOTDIR, "Not a directory", name)
+                wanted.add(name)
         return sorted(wanted, key=lambda name: (name.count("/"), name))
 
     def _run(self) -> None:
@@ -753,27 +597,32 @@ class Transaction:
         )
         journal_directory = root / f"{JOURNAL_PREFIX}{token}"
         self._journal_directory = journal_directory
-        operations: list[_Operation] = []
+        directories = tuple(self._missing_directories())
+        operations: list[Operation] = []
         for index, path in enumerate(paths):
             target = root / path
             exists = target.exists()
             if exists and not os.access(target, os.W_OK):
                 raise PermissionError(errno.EACCES, "permission denied")
             if path in self._puts:
-                kind: _Kind = "replace" if exists else "create"
+                kind: Kind = "replace" if exists else "create"
             else:
                 kind = "delete"
             operations.append(
-                _Operation(
+                Operation(
                     kind=kind,
                     path=path,
                     sha256=digests[path],
-                    staged=_staged_name(token, target).relative_to(root).as_posix(),
-                    backup=f"{_BACKUP_DIRECTORY}/{index}" if exists else None,
+                    staged=staged_name(token, target).relative_to(root).as_posix(),
+                    backup=f"{BACKUP_DIRECTORY}/{index}" if exists else None,
+                    mode=stat.S_IMODE(target.stat().st_mode) if exists else None,
                 )
             )
-        journal = _Journal(token, tuple(operations), tuple(self._missing_directories()))
+        journal = Journal(token, _host_name(), tuple(operations), directories)
         self._write_journal(journal, journal_directory)
+        # From here the vault can change, so any way out of this run that is not a finished
+        # rollback has to say so.
+        self._outcome = "incomplete"
         self._journal = journal
         _notify("journaled", 0)
         for name in journal.directories:
@@ -781,7 +630,7 @@ class Transaction:
         for index, operation in enumerate(journal.operations):
             staged = root / operation.staged
             if operation.kind != "delete":
-                _write_synced(staged, self._puts[operation.path])
+                write_synced(staged, self._puts[operation.path])
                 if operation.kind == "replace":
                     shutil.copymode(root / operation.path, staged)
             _notify("staged", index)
@@ -793,30 +642,30 @@ class Transaction:
                 if hashlib.sha256(staged.read_bytes()).hexdigest() != operation.sha256:
                     raise OSError(errno.EIO, "a staged file changed before it was applied")
                 os.replace(staged, root / operation.path)
-            _sync_directory((root / operation.path).parent)
+            sync_directory((root / operation.path).parent)
             _notify("applied", index)
         with _SignalDeferral() as deferral:
-            (journal_directory / _JOURNAL_FILE).unlink()
+            (journal_directory / JOURNAL_FILE).unlink()
             self._past_commit_point = True
         self._journal = None
-        _sync_directory(root)
+        sync_directory(root)
         _remove_tree(journal_directory)
         if deferral.signum is not None:
             raise _stop_for(deferral.signum)
 
-    def _write_journal(self, journal: _Journal, journal_directory: Path) -> None:
+    def _write_journal(self, journal: Journal, journal_directory: Path) -> None:
         journal_directory.mkdir()
-        (journal_directory / _BACKUP_DIRECTORY).mkdir()
+        (journal_directory / BACKUP_DIRECTORY).mkdir()
         for operation in journal.operations:
             if operation.backup is not None:
                 backup = journal_directory / operation.backup
                 shutil.copyfile(self._root / operation.path, backup)
                 shutil.copymode(self._root / operation.path, backup)
-        temporary = journal_directory / f"{_JOURNAL_FILE}.tmp"
-        _write_synced(temporary, journal.to_json().encode("utf-8"))
-        os.replace(temporary, journal_directory / _JOURNAL_FILE)
-        _sync_directory(journal_directory)
-        _sync_directory(self._root)
+        temporary = journal_directory / f"{JOURNAL_FILE}.tmp"
+        write_synced(temporary, journal.to_json().encode("utf-8"))
+        os.replace(temporary, journal_directory / JOURNAL_FILE)
+        sync_directory(journal_directory)
+        sync_directory(self._root)
 
     def _roll_back(self) -> list[str]:
         """Undo what the failed run did; return what could not be undone."""
@@ -827,11 +676,11 @@ class Transaction:
             # Failed before the journal was complete: no target had changed yet.
             _discard(journal_directory)
             return []
-        try:
-            return _undo(self._root, self._journal, journal_directory)
-        except BaseException:
-            self._outcome = "incomplete"
-            raise
+        plan = plan_undo(self._root, journal_directory, self._journal)
+        problems = [*plan.problems, *run_undo(plan)]
+        if not problems:
+            _discard(journal_directory)
+        return problems
 
     def _acquire_lock(self) -> None:
         root = self._root
@@ -857,7 +706,10 @@ class Transaction:
             raise _write_failure(error) from error
         self._lock_held = True
         try:
-            holder = json.dumps({"host": _host_name(), "pid": os.getpid()}, sort_keys=True)
+            holder = json.dumps(
+                {"host": _host_name(), "pid": os.getpid(), "start": process_start(os.getpid())},
+                sort_keys=True,
+            )
             os.write(descriptor, holder.encode("utf-8") + b"\n")
         except OSError as error:
             self._release_lock()

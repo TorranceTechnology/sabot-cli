@@ -2,14 +2,14 @@
 
 import json
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from sabot_cli.cli import main
-from sabot_cli.vault import walk
+from sabot_cli.testing import set_directory_listing
 
 FIXTURES = Path(__file__).parent / "fixtures" / "driftwood"
 FIXTURE_VAULT = FIXTURES / "vault"
@@ -49,7 +49,7 @@ type ListingOrder = Callable[[bool], None]
 
 
 @pytest.fixture
-def force_listing_order(monkeypatch: pytest.MonkeyPatch) -> ListingOrder:
+def force_listing_order() -> Iterator[ListingOrder]:
     """Make the vault walk see every directory in name order (False) or reverse name order (True).
 
     File systems list directories in an order of their own, often the sorted one, so a copy
@@ -60,9 +60,10 @@ def force_listing_order(monkeypatch: pytest.MonkeyPatch) -> ListingOrder:
         def listing(directory: Path) -> list[Path]:
             return sorted(directory.iterdir(), key=lambda entry: entry.name, reverse=reverse)
 
-        monkeypatch.setattr(walk, "directory_entries", listing)
+        set_directory_listing(listing)
 
-    return force
+    yield force
+    set_directory_listing(None)
 
 
 def copy_vault(destination: Path, *, reverse: bool = False) -> Path:

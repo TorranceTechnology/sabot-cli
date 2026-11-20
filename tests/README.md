@@ -26,6 +26,7 @@ The first line of a test module cites the behaviour IDs it covers. The table bel
 | SEG-8 | Boundaries mode hashes the spans a boundaries file proposes, and a second run gives identical bytes. | `test_segment.py` |
 | SEG-9 | Boundaries mode names each defect of a boundaries file (gap, overlap, bad offset, duplicate locator, missing parent and the others) and writes nothing. | `test_segment.py` |
 | SEG-10 | A rule-based result, emitted as a boundaries file and segmented again in boundaries mode, gives the same hashes. | `test_segment.py` |
+| SEG-11 | Each numbered line read as a continuation of the rule before it is listed with its line, number and span; the check is a notice, and `--strict-numbering` makes it fail with nothing written. | `test_source_edge_cases.py` |
 | LNT-1 | `lint --strict` reports nothing on the fixture vault. | `test_lint.py` |
 | LNT-P | For each lint class, a vault with one planted defect reports exactly that class, where it was planted. | `test_lint_probes.py` |
 | LNT-2 | The lint classes the tool lists and the classes the probes plant are the same set. | `test_lint_probes.py` |
@@ -79,7 +80,8 @@ These cover rules that have no ID of their own.
 
 | Subject | Test file |
 |---|---|
-| Writes into a vault are all-or-nothing, a killed write is refused until `recover`, `recover` trusts nothing a journal names, the lock records its writer, and a signal during rollback waits | `test_transaction.py` |
+| Writes into a vault are all-or-nothing, a killed write is refused until `recover`, `recover` changes a file only when it holds what the journal says and refuses a journal that names hidden, outside or linked paths, and a signal during rollback waits | `test_transaction.py` |
+| The lock records its writer's process id, host and start time; a reused process id is a stale lock; an impossible one cannot be judged and never crashes | `test_lock_process.py` |
 | Every command loads the ruleset and schema in the same way | `test_vault_loading.py` |
 | A key written twice is refused, never read as the last value | `test_duplicate_keys.py` |
 | Windows device names in note ids, file names and tracked paths | `test_reserved_names.py` |
@@ -99,5 +101,7 @@ These cover rules that have no ID of their own.
 
 - A command that refuses input has a test that plants the refusal and checks that nothing was written.
 - Tests that create files must not assume a case-sensitive file system, a POSIX permission model or `/` in a temporary path. Outputs name files relative to the vault with `/`; temporary paths use the platform's separator. `support/filesystem.py` has the markers for tests that need a case-insensitive file system, POSIX permissions or the ability to create a file named for a Windows device.
-- The vault walk lists directories through one function (`sabot_cli.vault.walk.directory_entries`), so `force_listing_order` in `conftest.py` can make a test see directories in a chosen order.
-- Tests import only public modules of `sabot_cli`, none whose name starts with an underscore.
+- The vault walk lists directories through one function, which `sabot_cli.testing.set_directory_listing` can replace, so `force_listing_order` in `conftest.py` can make a test see directories in a chosen order.
+- Tests import no module or name of `sabot_cli` that starts with an underscore (`test_layering.py` checks it). What a test needs from inside the package, the checkpoint hook of a write, the directory listing order, the YAML loader bases and the process start time, comes from `sabot_cli.testing`. The package has no stable Python interface, and `sabot_cli.testing` is not one.
+- The per-step failure and kill tests run every step of a small scenario and a sample of the 99-step `migrate-edition` one (each phase's first and last step and every tenth), since each step copies the vault and runs the command. CI prints the 20 slowest tests.
+- A planted journal has one operation with one flaw, so the check under test is the only one that can refuse it, and every refusal test compares the whole directory before and after.

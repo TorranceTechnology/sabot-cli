@@ -18,16 +18,22 @@ def register(subparsers: Subparsers) -> None:
         help="roll back a write that was killed, and clear what it left",
         description=(
             "Rolls back every unfinished write to its state before the run, removes staged "
-            "files and clears the write lock. It never completes a write. It refuses while a "
-            "sabot process of this host is writing the vault, and while the lock was left by "
-            "another host or cannot be read; --force overrides both once you know no write is "
-            "running."
+            "files and clears the write lock. It never completes a write. It changes a file "
+            "only when the file holds what the journal says it should, and changes nothing "
+            "when any operation cannot be checked. It refuses while a sabot process of this "
+            "host is writing the vault, while the lock was left by another host or cannot be "
+            "read, and for a journal written on another host; --force overrides these once "
+            "you know no write is running. Review a journal in a vault that came from "
+            "elsewhere before recovering it."
         ),
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="clear a lock held by a running process or left by another host (default: refuse)",
+        help=(
+            "clear a lock held by a running process or left by another host, and roll back a "
+            "journal written on another host (default: refuse)"
+        ),
     )
     add_vault_option(parser)
     add_json_option(parser)

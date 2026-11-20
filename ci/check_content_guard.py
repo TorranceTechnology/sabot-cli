@@ -19,9 +19,11 @@ match. A file with a UTF-16 or UTF-32 byte order mark is decoded as such. A file
 NUL byte and is not UTF-8 is reported as unreadable by the guard, which fails the run. A file
 with a NUL byte and no byte order mark is binary when it is not valid UTF-8, and is not
 scanned; when it is valid UTF-8 it is text holding NUL bytes (a UTF-16 file saved without its
-mark looks like this), which the guard scans with the NUL bytes removed and also reports, since
-a person must decide whether the file is text. An empty term, one with no letters or digits, is
-refused when hashing, because it would stand for every file.
+mark looks like this only while its text is ASCII), which the guard scans with the NUL bytes
+removed and also reports, since a person must decide whether the file is text. UTF-16 saved
+without a mark that holds any other character is not valid UTF-8, so it is skipped as
+binary. An empty term, one with no letters or digits, is refused when hashing, because it
+would stand for every file.
 """
 
 import argparse

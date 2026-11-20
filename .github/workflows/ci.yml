@@ -38,10 +38,10 @@ jobs:
         if: runner.os != 'Windows'
         env:
           SABOT_CLI_REQUIRE_PDFTOTEXT: "1"
-        run: uv run pytest
+        run: uv run pytest --durations=20
       - name: Test (Poppler not installed; pdftotext test skipped)
         if: runner.os == 'Windows'
-        run: uv run pytest
+        run: uv run pytest --durations=20
 
   content-guard:
     runs-on: ubuntu-latest

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 
 import yaml
 
-from sabot_cli.vault import yaml_loader
+from sabot_cli.vault import _yaml
 
 _DELIMITER = "---"
 
@@ -39,7 +39,7 @@ def parse(text: str) -> tuple[Mapping[str, object], str]:
     """Return the front matter mapping and the body that follows its closing delimiter."""
     lines, closing = split(text.replace("\r\n", "\n"))
     try:
-        loaded = yaml_loader.load("\n".join(lines[1:closing]))
+        loaded = _yaml.load("\n".join(lines[1:closing]))
     except yaml.MarkedYAMLError as error:
         # +2: one for the opening delimiter, one because marks count from zero.
         where = f" at line {error.problem_mark.line + 2}" if error.problem_mark else ""

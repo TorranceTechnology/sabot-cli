@@ -1,6 +1,6 @@
 """The deterministic walk that decides which files are notes."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 _SKIPPED_FILE = "README.md"
@@ -8,13 +8,27 @@ _SKIPPED_DIRECTORY_PREFIXES = ("_", ".")
 _HIDDEN_PREFIX = "."
 
 
+type Listing = Callable[[Path], Iterable[Path]]
+
+_listing: Listing | None = None
+
+
+def set_listing(listing: Listing | None) -> None:
+    """Make the walk read directories through `listing`, or restore the file system's order.
+
+    A test substitutes another order to check that nothing downstream depends on it.
+    """
+    global _listing
+    _listing = listing
+
+
 def directory_entries(directory: Path) -> Iterable[Path]:
     """The entries of one directory in whatever order the file system lists them.
 
     The walk reads directories only through this function, so a test can substitute another
-    order and check that nothing downstream depends on it.
+    order with `set_listing`.
     """
-    return directory.iterdir()
+    return directory.iterdir() if _listing is None else _listing(directory)
 
 
 def note_files(root: Path) -> list[Path]:

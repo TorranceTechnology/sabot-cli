@@ -17,3 +17,16 @@ class Item:
     start: int
     end: int
     leading_sentence: bool = False
+
+
+@dataclass(frozen=True)
+class Continuation:
+    """A line that begins with a number and was read as text of the rule before it.
+
+    `line` counts physical lines of the text from 1, `number` is the number the line begins
+    with, and `span` is the locator of the span the line was joined to.
+    """
+
+    line: int
+    number: str
+    span: str

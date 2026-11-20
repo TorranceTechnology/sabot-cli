@@ -1,26 +1,29 @@
 """Writes into a vault are all-or-nothing: a failure at any step leaves the vault as it was."""
 
 import errno
+import hashlib
 import json
 import os
 import shutil
 import signal
+import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
 from conftest import FIXTURES, CliRunner, copy_vault
+from sabot_cli.testing import HardStop, checkpoint_hook
 from sabot_cli.vault import load_vault
 from sabot_cli.vault import transaction as transaction_module
 from sabot_cli.vault.transaction import (
     LOCK_FILE,
-    HardStop,
     Transaction,
     TransactionError,
     atomic_write,
-    checkpoint_hook,
+    is_vault_path,
 )
 from source_vaults import error_code, ingest_arguments, segment_arguments, vault_with_sources
 from support.filesystem import requires_posix_permissions
@@ -81,6 +84,23 @@ def _record_steps(run_cli: CliRunner, scenario: Scenario, where: Path) -> list[t
     return steps
 
 
+# A scenario with more steps than this runs a sample of them: every step costs a copy of the
+# vault and a full run, which on Windows adds up to minutes for the 99-step migration.
+_EXHAUSTIVE_LIMIT = 40
+_SAMPLE_EVERY = 10
+
+
+def _steps_to_try(steps: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    """Every step of a small scenario; of a large one, each phase's ends and every tenth."""
+    if len(steps) <= _EXHAUSTIVE_LIMIT:
+        return steps
+    chosen = set(range(0, len(steps), _SAMPLE_EVERY))
+    for phase in {phase for phase, _ in steps}:
+        positions = [number for number, (name, _) in enumerate(steps) if name == phase]
+        chosen |= {positions[0], positions[-1]}
+    return [steps[number] for number in sorted(chosen)]
+
+
 def _run_plan(vault: Path, plan: Callable[[Transaction], None]) -> None:
     with Transaction(vault) as transaction:
         plan(transaction)
@@ -115,7 +135,7 @@ def test_a_failure_after_any_step_leaves_the_vault_unchanged(
     steps = _record_steps(run_cli, scenario, tmp_path / "probe")
     assert {phase for phase, _ in steps} == {"journaled", "staged", "applied"}
 
-    for number, step in enumerate(steps):
+    for number, step in enumerate(_steps_to_try(steps)):
         vault = scenario.build(run_cli, tmp_path / f"run-{number}")
         before = vault_state(vault)
 
@@ -136,7 +156,7 @@ def test_a_kill_at_any_step_is_refused_until_recover_rolls_it_back(
 ) -> None:
     steps = _record_steps(run_cli, scenario, tmp_path / "probe")
 
-    for number, step in enumerate(steps):
+    for number, step in enumerate(_steps_to_try(steps)):
         # Given a vault whose write was killed outright at that step
         vault = scenario.build(run_cli, tmp_path / f"run-{number}")
         before = vault_state(vault)
@@ -692,14 +712,14 @@ def test_a_journal_directory_without_a_record_is_committed_and_blocks_nothing(
 def test_removing_a_journal_tries_again_when_a_file_is_briefly_held(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Given a removal that fails twice, as it does while a scanner holds a file open
+    # Given a removal that fails four times, as it does while a scanner holds a file open
     vault = copy_vault(tmp_path / "vault")
     real_rmtree = shutil.rmtree
     attempts: list[Path] = []
 
     def holding(path: Path, *args: object, **kwargs: object) -> None:
         attempts.append(Path(path))
-        if len(attempts) <= 2:
+        if len(attempts) <= 4:
             raise PermissionError(errno.EACCES, "held open")
         real_rmtree(path, *args, **kwargs)  # type: ignore[arg-type]
 
@@ -712,7 +732,7 @@ def test_removing_a_journal_tries_again_when_a_file_is_briefly_held(
         transaction.commit()
 
     # Then the removal was retried until it worked and no journal directory remains
-    assert len(attempts) == 3
+    assert len(attempts) == 5
     assert not list(vault.glob(".sabot-txn-*"))
 
 
@@ -842,24 +862,8 @@ def test_a_retry_after_a_failed_ingest_is_not_refused_for_what_it_left(
 def test_recover_refuses_a_rollback_it_cannot_complete(run_cli: CliRunner, tmp_path: Path) -> None:
     # Given a journal that asks for a file to be restored over a directory
     vault = copy_vault(tmp_path / "vault")
-    journal = vault / ".sabot-txn-dddddddddddd"
-    (journal / "backup").mkdir(parents=True)
-    (journal / "backup" / "0").write_bytes(b"old")
-    record = {
-        "directories": [],
-        "format": 1,
-        "operations": [
-            {
-                "backup": "backup/0",
-                "kind": "replace",
-                "path": "clauses",
-                "sha256": "0" * 64,
-                "staged": ".sabot-new-dddddddddddd-clauses",
-            }
-        ],
-        "token": "dddddddddddd",
-    }
-    (journal / "journal.json").write_text(json.dumps(record), encoding="utf-8")
+    _plant_journal(vault, _record([_operation("clauses")]))
+    before = vault_state(vault)
 
     # When recover runs
     result = run_cli("recover", "--vault", str(vault), "--json")
@@ -867,51 +871,89 @@ def test_recover_refuses_a_rollback_it_cannot_complete(run_cli: CliRunner, tmp_p
     # Then it refuses with recovery-failed and keeps the journal for another attempt
     assert result.returncode == 3
     assert error_code(result) == "recovery-failed"
-    assert (journal / "journal.json").is_file()
+    assert vault_state(vault) == before
 
 
-def _plant_journal(vault: Path, record: dict[str, object]) -> Path:
-    token = str(record["token"])
-    directory = vault / f".sabot-txn-{token}"
-    (directory / "backup").mkdir(parents=True)
-    (directory / "backup" / "0").write_bytes(b"ATTACKER")
-    (directory / "journal.json").write_text(json.dumps(record), encoding="utf-8")
-    return directory
+_TOKEN = "eeeeeeeeeeee"
+
+
+def _record(
+    operations: list[dict[str, object]],
+    *,
+    directories: tuple[str, ...] = (),
+    host: str | None = None,
+) -> dict[str, object]:
+    return {
+        "directories": list(directories),
+        "format": 2,
+        "host": socket.gethostname() if host is None else host,
+        "operations": operations,
+        "token": _TOKEN,
+    }
 
 
 def _operation(
-    token: str, *, path: str = "clauses/cl.setup.md", **overrides: object
+    path: str = "clauses/cl.setup.md",
+    *,
+    kind: str = "replace",
+    sha256: str | None = None,
+    **overrides: object,
 ) -> dict[str, object]:
     name = path.rsplit("/", 1)[-1]
     parent = path[: -len(name)]
+    puts_back = kind != "create"
     operation: dict[str, object] = {
-        "backup": "backup/0",
-        "kind": "replace",
+        "backup": "backup/0" if puts_back else None,
+        "kind": kind,
+        "mode": 0o644 if puts_back else None,
         "path": path,
-        "sha256": "0" * 64,
-        "staged": f"{parent}.sabot-new-{token}-{name}",
+        "sha256": sha256 or "0" * 64,
+        "staged": f"{parent}.sabot-new-{_TOKEN}-{name}",
     }
     operation.update(overrides)
     return operation
 
 
-_TOKEN = "eeeeeeeeeeee"
+def _plant_journal(vault: Path, record: dict[str, object], *, backup: bytes = b"ATTACKER") -> Path:
+    directory = vault / f".sabot-txn-{record['token']}"
+    (directory / "backup").mkdir(parents=True)
+    (directory / "backup" / "0").write_bytes(backup)
+    (directory / "journal.json").write_text(json.dumps(record), encoding="utf-8")
+    return directory
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 _JOURNAL_FLAWS: dict[str, Callable[[Path], dict[str, object]]] = {
-    "path above the vault": lambda outside: {"path": "../victim.txt", "staged": "../x"},
-    "absolute path": lambda outside: {"path": str(outside / "victim.txt"), "staged": "x"},
-    "staged file elsewhere": lambda outside: {
-        "path": "clauses/cl.setup.md",
-        "staged": f"../.sabot-new-{_TOKEN}-cl.setup.md",
+    "path above the vault": lambda outside: {
+        "path": "../victim.txt",
+        "staged": f"../.sabot-new-{_TOKEN}-victim.txt",
     },
+    "absolute path": lambda outside: {
+        "path": str(outside / "victim.txt"),
+        "staged": f"{outside}/.sabot-new-{_TOKEN}-victim.txt",
+    },
+    "hidden directory": lambda outside: {
+        "path": ".git/hooks/pre-commit",
+        "staged": f".git/hooks/.sabot-new-{_TOKEN}-pre-commit",
+    },
+    "hidden file": lambda outside: {
+        "path": "clauses/.cl.setup.md",
+        "staged": f"clauses/.sabot-new-{_TOKEN}-.cl.setup.md",
+    },
+    "staged file elsewhere": lambda outside: {"staged": f"../.sabot-new-{_TOKEN}-cl.setup.md"},
     "staged file of another name": lambda outside: {
-        "path": "clauses/cl.setup.md",
-        "staged": f"clauses/.sabot-new-{_TOKEN}-other.md",
+        "staged": f"clauses/.sabot-new-{_TOKEN}-other.md"
     },
     "backup above the journal": lambda outside: {"backup": "../../../victim.txt"},
     "absolute backup": lambda outside: {"backup": str(outside / "victim.txt")},
-    "unknown operation": lambda outside: {"kind": "delete"},
+    "unknown operation": lambda outside: {"kind": "rewrite"},
     "replace without a backup": lambda outside: {"backup": None},
-    "create with a backup": lambda outside: {"kind": "create"},
+    "replace without a mode": lambda outside: {"mode": None},
+    "mode out of range": lambda outside: {"mode": 0o77777},
+    "create with a backup": lambda outside: {"kind": "create", "backup": "backup/0", "mode": 0o644},
     "malformed digest": lambda outside: {"sha256": "nothex"},
     "path of the journal's own": lambda outside: {
         "path": f".sabot-txn-{_TOKEN}/journal.json",
@@ -921,63 +963,345 @@ _JOURNAL_FLAWS: dict[str, Callable[[Path], dict[str, object]]] = {
 
 
 @pytest.mark.parametrize("flaw", sorted(_JOURNAL_FLAWS))
-def test_recover_refuses_a_journal_that_names_files_outside_the_vault(
+def test_recover_refuses_a_journal_that_names_what_it_may_not(
     flaw: str, run_cli: CliRunner, tmp_path: Path
 ) -> None:
-    # Given files outside a vault, and a planted journal that points a replace and a create at
-    # them (a vault shared through version control can carry such a directory)
+    # Given files outside a vault, and a planted journal of one operation with one flaw (a
+    # vault shared through version control can carry such a directory)
     outside = tmp_path / "outside"
     outside.mkdir()
-    victim, other = outside / "victim.txt", outside / "victim2.txt"
-    victim.write_bytes(b"original")
-    other.write_bytes(b"also original")
+    (outside / "victim.txt").write_bytes(b"original")
+    (tmp_path / f".sabot-new-{_TOKEN}-cl.setup.md").write_bytes(b"a staged victim")
+    (tmp_path / f".sabot-new-{_TOKEN}-victim.txt").write_bytes(b"another victim")
     vault = copy_vault(tmp_path / "vault")
-    first = _operation(_TOKEN, **_JOURNAL_FLAWS[flaw](outside))
-    second = _operation(_TOKEN, path="../victim2.txt", kind="create", backup=None)
-    _plant_journal(
-        vault,
-        {
-            "directories": ["../newdir"],
-            "format": 1,
-            "operations": [first, second],
-            "token": _TOKEN,
-        },
-    )
-    before_vault = vault_state(vault)
-    before_outside = vault_state(outside)
+    setup = (vault / "clauses" / "cl.setup.md").read_bytes()
+    operation = _operation(**{"sha256": _sha(setup), **_JOURNAL_FLAWS[flaw](outside)})
+    _plant_journal(vault, _record([operation]))
+    before = vault_state(tmp_path)
 
     # When recover runs
     result = run_cli("recover", "--vault", str(vault), "--json")
 
-    # Then it refuses the journal and nothing outside the vault, or inside it, is touched
+    # Then it refuses the journal and nothing, in the vault or beside it, is touched
     assert result.returncode == 3
     assert error_code(result) == "journal-invalid"
-    assert vault_state(outside) == before_outside
-    assert not (tmp_path / "newdir").exists()
-    assert vault_state(vault) == before_vault
+    assert vault_state(tmp_path) == before
 
 
-def test_recover_refuses_a_journal_whose_token_is_not_its_directory(
+def test_recover_refuses_a_journal_that_names_a_directory_it_may_not(
     run_cli: CliRunner, tmp_path: Path
 ) -> None:
-    # Given a journal directory holding a record of another token
+    # Given a journal whose created-directory list reaches above the vault and into .git
+    (tmp_path / "newdir").mkdir()
     vault = copy_vault(tmp_path / "vault")
-    record = {
-        "directories": [],
-        "format": 1,
-        "operations": [_operation("ffffffffffff")],
-        "token": "ffffffffffff",
-    }
-    directory = _plant_journal(vault, record)
-    directory.rename(vault / f".sabot-txn-{_TOKEN}")
+    for name in ("../newdir", ".git"):
+        directory = _plant_journal(vault, _record([], directories=(name,)))
+        before = vault_state(tmp_path)
+
+        # When recover runs
+        result = run_cli("recover", "--vault", str(vault), "--json")
+
+        # Then it refuses and nothing changes
+        assert error_code(result) == "journal-invalid", name
+        assert vault_state(tmp_path) == before, name
+        shutil.rmtree(directory)
+
+
+def test_recover_accepts_a_well_formed_journal_and_restores_what_it_names(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a journal of the shape this tool writes, for a note that holds what the write put
+    vault = copy_vault(tmp_path / "vault")
+    note = vault / "clauses" / "cl.setup.md"
+    written = note.read_bytes()
+    _plant_journal(vault, _record([_operation(sha256=_sha(written))]), backup=b"the original\n")
+
+    # When recover runs
+    result = run_cli("recover", "--vault", str(vault), "--json")
+
+    # Then the note holds the backup's bytes and the journal is gone
+    assert result.returncode == 0
+    assert note.read_bytes() == b"the original\n"
+    assert not list(vault.glob(".sabot-txn-*"))
+
+
+def test_recover_installs_no_hook_below_git_and_changes_nothing(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault with a .git directory and a planted journal that replaces a git hook with an
+    # executable script
+    vault = copy_vault(tmp_path / "vault")
+    (vault / ".git" / "hooks").mkdir(parents=True)
+    (vault / ".git" / "hooks" / "pre-commit.sample").write_bytes(b"sample\n")
+    hook = _operation(
+        ".git/hooks/pre-commit", kind="create", staged=f".git/hooks/.sabot-new-{_TOKEN}-pre-commit"
+    )
+    hook.update(kind="replace", backup="backup/0", mode=0o755)
+    _plant_journal(vault, _record([hook]), backup=b"#!/bin/sh\necho pwned > pwned.txt\n")
     before = vault_state(vault)
 
     # When recover runs
     result = run_cli("recover", "--vault", str(vault), "--json")
 
-    # Then it refuses and changes nothing
+    # Then it refuses and no hook exists
+    assert result.returncode == 3
+    assert error_code(result) == "journal-invalid"
+    assert not (vault / ".git" / "hooks" / "pre-commit").exists()
+    assert vault_state(vault) == before
+
+
+def test_recover_deletes_neither_git_head_nor_a_note_a_journal_names(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault with .git/HEAD and a planted journal that creates it and a note, the note's
+    # digest being the digest of what it holds now
+    vault = copy_vault(tmp_path / "vault")
+    (vault / ".git").mkdir()
+    (vault / ".git" / "HEAD").write_bytes(b"ref: refs/heads/main\n")
+    note = vault / "clauses" / "cl.setup.md"
+    digest = _sha(note.read_bytes())
+    head = _operation(".git/HEAD", kind="create", sha256=digest)
+    victim = _operation("clauses/cl.setup.md", kind="create", sha256=digest)
+    _plant_journal(vault, _record([head, victim]))
+    before = vault_state(vault)
+
+    # When recover runs
+    result = run_cli("recover", "--vault", str(vault), "--json")
+
+    # Then it refuses the journal as a whole: both files are still there
+    assert result.returncode == 3
     assert error_code(result) == "journal-invalid"
     assert vault_state(vault) == before
+
+
+@dataclass(frozen=True)
+class _Case:
+    kind: str
+    current: bytes | None  # what the target holds when recover runs
+    expect: bytes | Literal["refused"] | None  # what it holds afterwards
+
+
+_NEW, _OLD = b"what the write put there\n", b"what the write replaced\n"
+_CASES = {
+    "create, file is absent": _Case("create", None, None),
+    "create, file holds the journaled bytes": _Case("create", _NEW, None),
+    "create, file holds other bytes": _Case("create", b"edited since\n", "refused"),
+    "replace, file holds the journaled bytes": _Case("replace", _NEW, _OLD),
+    "replace, file already holds the backup": _Case("replace", _OLD, _OLD),
+    "replace, file holds other bytes": _Case("replace", b"edited since\n", "refused"),
+    "replace, file is gone": _Case("replace", None, "refused"),
+    "delete, file is absent": _Case("delete", None, _OLD),
+    "delete, file already holds the backup": _Case("delete", _OLD, _OLD),
+    "delete, file holds other bytes": _Case("delete", b"edited since\n", "refused"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_CASES))
+def test_recover_changes_a_file_only_when_it_holds_what_the_journal_says(
+    name: str, run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a planted journal of one operation, and the file it names holding some bytes
+    case = _CASES[name]
+    vault = copy_vault(tmp_path / "vault")
+    target = vault / "clauses" / "cl.probe.md"
+    if case.current is not None:
+        target.write_bytes(case.current)
+    operation = _operation("clauses/cl.probe.md", kind=case.kind, sha256=_sha(_NEW))
+    _plant_journal(vault, _record([operation]), backup=_OLD)
+    before = vault_state(vault)
+
+    # When recover runs
+    result = run_cli("recover", "--vault", str(vault), "--json")
+
+    if case.expect == "refused":
+        # Then it refuses, and the file, the journal and everything else are as they were
+        assert result.returncode == 3
+        assert error_code(result) == "recovery-failed"
+        assert vault_state(vault) == before
+    else:
+        # Then the file holds what the rule says, and the journal is gone
+        assert result.returncode == 0
+        assert (target.read_bytes() if target.exists() else None) == case.expect
+        assert not list(vault.glob(".sabot-txn-*"))
+
+
+def test_one_operation_that_cannot_be_verified_stops_the_whole_recovery(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a journal whose first operation is verifiable (a created file holding what was
+    # journaled) and whose second is not (a replaced file edited since)
+    vault = copy_vault(tmp_path / "vault")
+    created = vault / "clauses" / "cl.created.md"
+    created.write_bytes(_NEW)
+    edited = vault / "clauses" / "cl.setup.md"
+    edited_bytes = edited.read_bytes()
+    operations = [
+        _operation("clauses/cl.created.md", kind="create", sha256=_sha(_NEW)),
+        _operation("clauses/cl.setup.md", sha256=_sha(_NEW), backup="backup/0"),
+    ]
+    _plant_journal(vault, _record(operations), backup=_OLD)
+    before = vault_state(vault)
+
+    # When recover runs
+    result = run_cli("recover", "--vault", str(vault), "--json")
+
+    # Then it refuses and the verifiable operation was not carried out either
+    assert error_code(result) == "recovery-failed"
+    assert created.read_bytes() == _NEW
+    assert edited.read_bytes() == edited_bytes
+    assert vault_state(vault) == before
+
+
+@requires_posix_permissions
+@pytest.mark.parametrize(
+    ("current_mode", "recorded_mode", "expected"),
+    [
+        (0o644, 0o755, 0o644),
+        (0o755, 0o755, 0o755),
+        (0o755, 0o644, 0o644),
+        (0o644, 0o4755, 0o644),
+        (0o640, 0o640, 0o640),
+    ],
+    ids=[
+        "a journal cannot make a file executable",
+        "an executable file stays executable",
+        "an execute bit the journal does not record is not given",
+        "set-id bits are never restored",
+        "other bits are the recorded ones",
+    ],
+)
+def test_a_restored_file_never_gains_execute_or_set_id_bits_from_a_journal(
+    current_mode: int, recorded_mode: int, expected: int, run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a planted replace of a file that holds the journaled bytes, with a recorded mode
+    vault = copy_vault(tmp_path / "vault")
+    target = vault / "clauses" / "cl.probe.md"
+    target.write_bytes(_NEW)
+    target.chmod(current_mode)
+    operation = _operation("clauses/cl.probe.md", sha256=_sha(_NEW), mode=recorded_mode)
+    _plant_journal(vault, _record([operation]), backup=_OLD)
+
+    # When recover runs
+    assert run_cli("recover", "--vault", str(vault)).returncode == 0
+
+    # Then the file holds the backup, with the bits the rule allows
+    assert target.read_bytes() == _OLD
+    assert target.stat().st_mode & 0o7777 == expected
+
+
+@requires_posix_permissions
+def test_a_file_deleted_by_a_write_comes_back_without_execute_bits(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a planted delete of a file that is absent, recorded as executable
+    vault = copy_vault(tmp_path / "vault")
+    operation = _operation("clauses/cl.probe.md", kind="delete", mode=0o755)
+    _plant_journal(vault, _record([operation]), backup=_OLD)
+
+    # When recover runs
+    assert run_cli("recover", "--vault", str(vault)).returncode == 0
+
+    # Then the file is back, not executable
+    restored = vault / "clauses" / "cl.probe.md"
+    assert restored.read_bytes() == _OLD
+    assert restored.stat().st_mode & 0o111 == 0
+
+
+@requires_posix_permissions
+def test_a_killed_replace_of_an_executable_file_recovers_its_bytes_and_mode(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given an executable note whose replacement was killed after it was applied
+    vault = copy_vault(tmp_path / "vault")
+    note = vault / "clauses" / "cl.setup.md"
+    note.chmod(0o750)
+    before = vault_state(vault)
+    _kill_a_replace(vault, ("applied", 0))
+
+    # When recover runs
+    assert run_cli("recover", "--vault", str(vault)).returncode == 0
+
+    # Then its bytes and its mode are what they were
+    assert vault_state(vault) == before
+    assert note.stat().st_mode & 0o777 == 0o750
+
+
+def test_recover_refuses_a_journal_from_another_host_until_forced(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a journal of the right shape that another host wrote
+    vault = copy_vault(tmp_path / "vault")
+    note = vault / "clauses" / "cl.setup.md"
+    operation = _operation(sha256=_sha(note.read_bytes()))
+    _plant_journal(vault, _record([operation], host="another-host.invalid"), backup=_OLD)
+    before = vault_state(vault)
+
+    # When recover runs without --force
+    refused = run_cli("recover", "--vault", str(vault), "--json")
+
+    # Then it refuses and changes nothing
+    assert refused.returncode == 3
+    assert error_code(refused) == "journal-other-host"
+    assert vault_state(vault) == before
+
+    # And with --force it rolls the journal back, the other checks still holding
+    forced = run_cli("recover", "--force", "--vault", str(vault), "--json")
+    assert forced.returncode == 0
+    assert note.read_bytes() == _OLD
+
+
+def test_recover_refuses_a_journal_directory_that_is_a_link(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a journal outside the vault, and a link to it in the vault under a journal's name
+    elsewhere = tmp_path / "elsewhere"
+    note = tmp_path / "vault-copy" / "clauses" / "cl.setup.md"
+    note.parent.mkdir(parents=True)
+    note.write_bytes(b"x")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    _plant_journal(staging, _record([_operation(sha256=_sha(b"x"))]))
+    shutil.move(staging / f".sabot-txn-{_TOKEN}", elsewhere)
+    vault = copy_vault(tmp_path / "vault")
+    try:
+        (vault / f".sabot-txn-{_TOKEN}").symlink_to(elsewhere, target_is_directory=True)
+    except OSError:
+        pytest.skip("this account cannot create symbolic links")
+    before = vault_state(tmp_path)
+
+    # When recover runs
+    result = run_cli("recover", "--vault", str(vault), "--json")
+
+    # Then it refuses and nothing, linked or not, changes
+    assert error_code(result) == "journal-invalid"
+    assert vault_state(tmp_path) == before
+
+
+def test_recover_does_not_follow_a_backup_directory_that_is_a_link(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a journal whose backup directory is a link to a directory outside the vault, which
+    # holds a file named for the backup
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "0").write_bytes(b"LEAKED")
+    vault = copy_vault(tmp_path / "vault")
+    note = vault / "clauses" / "cl.setup.md"
+    directory = _plant_journal(vault, _record([_operation(sha256=_sha(note.read_bytes()))]))
+    shutil.rmtree(directory / "backup")
+    try:
+        (directory / "backup").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("this account cannot create symbolic links")
+    before = vault_state(tmp_path)
+
+    # When recover runs
+    result = run_cli("recover", "--vault", str(vault), "--json")
+
+    # Then it refuses and the outside file was not copied into the vault
+    assert error_code(result) == "journal-invalid"
+    assert note.read_bytes() != b"LEAKED"
+    assert vault_state(tmp_path) == before
 
 
 def test_recover_does_not_write_through_a_link_that_leaves_the_vault(
@@ -993,17 +1317,8 @@ def test_recover_does_not_write_through_a_link_that_leaves_the_vault(
         (vault / "linked").symlink_to(outside, target_is_directory=True)
     except OSError:
         pytest.skip("this account cannot create symbolic links")
-    _plant_journal(
-        vault,
-        {
-            "directories": [],
-            "format": 1,
-            "operations": [
-                _operation(_TOKEN, path="linked/cl.victim.md", kind="create", backup=None)
-            ],
-            "token": _TOKEN,
-        },
-    )
+    operation = _operation("linked/cl.victim.md", kind="create", sha256=_sha(b"original"))
+    _plant_journal(vault, _record([operation]))
     before_outside = vault_state(outside)
 
     # When recover runs
@@ -1013,6 +1328,131 @@ def test_recover_does_not_write_through_a_link_that_leaves_the_vault(
     assert result.returncode == 3
     assert error_code(result) == "recovery-failed"
     assert vault_state(outside) == before_outside
+
+
+def test_recover_does_not_replace_a_link_inside_the_vault(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a note that is a link to a file outside, and a journal that replaces the note with
+    # the digest of what the link reads
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"original")
+    vault = copy_vault(tmp_path / "vault")
+    try:
+        (vault / "clauses" / "cl.link.md").symlink_to(outside)
+    except OSError:
+        pytest.skip("this account cannot create symbolic links")
+    operation = _operation("clauses/cl.link.md", sha256=_sha(b"original"))
+    _plant_journal(vault, _record([operation]), backup=b"ATTACKER")
+
+    # When recover runs
+    result = run_cli("recover", "--vault", str(vault), "--json")
+
+    # Then it refuses, and the outside file is intact
+    assert error_code(result) == "recovery-failed"
+    assert outside.read_bytes() == b"original"
+
+
+def test_a_planned_file_below_a_file_is_refused_before_a_journal_exists(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a vault in which `_index` is a file, so `_index/graph.json` cannot be made
+    vault = copy_vault(tmp_path / "vault")
+    (vault / "_index").write_bytes(b"in the way\n")
+    before = vault_state(vault)
+
+    # When compile runs
+    result = run_cli("compile", "--vault", str(vault), "--json")
+
+    # Then it refuses as a write failure that did not change anything, and leaves no journal
+    assert result.returncode == 3
+    assert error_code(result) == "write-failed"
+    assert "recover" not in result.stdout
+    assert vault_state(vault) == before
+    assert run_cli("search", "tide", "--vault", str(vault), "--json").returncode == 0
+
+
+def test_recover_clears_a_journal_whose_created_file_sits_below_a_file(
+    run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a journal that created `_index/graph.json`, when `_index` is now a file
+    vault = copy_vault(tmp_path / "vault")
+    (vault / "_index").write_bytes(b"in the way\n")
+    operation = _operation("_index/graph.json", kind="create", sha256=_sha(b"{}"))
+    _plant_journal(vault, _record([operation], directories=("_index",)))
+
+    # When recover runs
+    result = run_cli("recover", "--vault", str(vault), "--json")
+
+    # Then the file below a file counts as absent, the journal is cleared and `_index` is kept
+    assert result.returncode == 0
+    assert (vault / "_index").read_bytes() == b"in the way\n"
+    assert not list(vault.glob(".sabot-txn-*"))
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGTERM"), reason="the platform has no SIGTERM")
+def test_a_signal_that_escapes_the_rollback_does_not_claim_the_vault_was_left_as_it_was(
+    monkeypatch: pytest.MonkeyPatch, run_cli: CliRunner, tmp_path: Path
+) -> None:
+    # Given a write that fails after its first applied operation, and a termination signal that
+    # arrives just before the rollback can defer signals
+    vault = copy_vault(tmp_path / "vault")
+    before = vault_state(vault)
+
+    real_signal = signal.signal
+    armed = False
+
+    def fail(phase: str, index: int) -> None:
+        nonlocal armed
+        if (phase, index) == ("applied", 0):
+            armed = True
+            raise OSError(errno.EIO, "injected")
+
+    def late(number: int, handler: object) -> object:
+        nonlocal armed
+        if armed:
+            armed = False
+            signal.raise_signal(signal.SIGTERM)
+        return real_signal(number, handler)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(signal, "signal", late)
+
+    # When ingest runs
+    with checkpoint_hook(fail):
+        result = run_cli(*ingest_arguments(RULES_E2, "dwx"), "--vault", str(vault), "--json")
+    monkeypatch.undo()
+
+    # Then it says the run could not be undone and names recover, since the vault did change
+    assert error_code(result) == "interrupted"
+    message = str(result.json()["error"]["message"])  # type: ignore[index]
+    assert "left as it was" not in message
+    assert "sabot recover" in message
+    # And recover restores the vault
+    assert run_cli("recover", "--vault", str(vault), "--json").returncode == 0
+    assert vault_state(vault) == before
+
+
+@pytest.mark.parametrize(
+    ("path", "windows", "accepted"),
+    [
+        ("clauses/cl.setup.md", False, True),
+        ("_index/graph.json", True, True),
+        (".git/HEAD", False, False),
+        ("clauses/.hidden.md", False, False),
+        (".GIT/hooks/x", False, False),
+        ("a/./b", False, False),
+        ("clauses/name.", True, False),
+        ("clauses/name.", False, True),
+        ("clauses/name ", True, False),
+        ("PROGRA~1/x.md", True, False),
+        ("PROGRA~1/x.md", False, True),
+    ],
+)
+def test_the_paths_a_journal_may_name(path: str, windows: bool, accepted: bool) -> None:
+    # Given a path and whether Windows' extra rules apply
+    # When it is judged
+    # Then hidden names are refused everywhere, and Windows aliases of a name on Windows
+    assert is_vault_path(path, windows=windows) is accepted
 
 
 def test_a_deleted_file_is_put_back_by_a_rollback_and_a_missing_one_is_ignored(

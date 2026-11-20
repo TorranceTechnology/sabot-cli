@@ -18,7 +18,7 @@ _DEVICE_NAMES = frozenset(
         *(f"lpt{n}" for n in (*range(1, 10), "\u00b9", "\u00b2", "\u00b3")),
     }
 )
-_SKIPPED_DIRECTORIES = frozenset({".git"})
+_HIDDEN_PREFIX = "."
 
 
 def reserved_device_name(name: str) -> bool:
@@ -41,12 +41,14 @@ def windows_unusable_name(name: str) -> str | None:
 def windows_unusable_entries(root: Path) -> tuple[tuple[str, str, bool, str], ...]:
     """Every file and directory below `root` whose name Windows cannot hold, sorted by path.
 
-    Each entry is (relative POSIX path, name, is a directory, reason). The `.git` directory is
-    not entered, since git owns what is in it.
+    Each entry is (relative POSIX path, name, is a directory, reason). A directory whose name
+    starts with a dot is not entered, as the walk that finds notes does not: `.git` belongs to
+    git and `.obsidian` to the editor, and either may be untracked or ignored, so what is inside
+    is not part of the vault a checkout carries.
     """
     found: list[tuple[str, str, bool, str]] = []
     for directory, subdirectories, files in os.walk(root):
-        subdirectories[:] = [name for name in subdirectories if name not in _SKIPPED_DIRECTORIES]
+        subdirectories[:] = [name for name in subdirectories if not name.startswith(_HIDDEN_PREFIX)]
         for names, is_directory in ((subdirectories, True), (files, False)):
             for name in names:
                 reason = windows_unusable_name(name)
