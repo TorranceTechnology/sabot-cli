@@ -4,6 +4,7 @@ from collections.abc import Iterator
 
 from sabot_cli.rules._checks._context import LintContext
 from sabot_cli.rules._checks._model import Report
+from sabot_cli.sources import span_file_relative
 
 _SUBTREE_STATUSES = frozenset({"refused", "structural"})
 
@@ -21,9 +22,8 @@ def _check_span_unknown(ctx: LintContext) -> Iterator[Report]:
             if index is None:
                 yield ctx.report(note, f"{citation.raw} cannot be checked: {problem}")
                 continue
-            sentence = "" if ref.sentence is None else f"/s{ref.sentence}"
-            if f"{ref.span}{sentence}" not in index:
-                yield ctx.report(note, f"{citation.raw} is not in spans/{ref.source}.jsonl")
+            if ref.record_span not in index:
+                yield ctx.report(note, f"{citation.raw} is not in {span_file_relative(ref.source)}")
 
 
 def _check_span_subtree_misused(ctx: LintContext) -> Iterator[Report]:

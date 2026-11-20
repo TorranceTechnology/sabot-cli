@@ -138,6 +138,33 @@ def _rename_host(vault_root: Path, defect: str, new_id: str) -> PlantedDefect:
     return PlantedDefect(defect, _relative(vault_root, destination), new_id, (new_id,))
 
 
+def _id_reserved_name(vault_root: Path) -> PlantedDefect:
+    """Give the `win.` extension type the prefix `aux.` and rename its one note to match.
+
+    Prefix, id and file name agree, so no other id rule trips; only the device name does.
+    """
+    ruleset = vault_root / "_ruleset.yaml"
+    text = ruleset.read_bytes().decode("utf-8")
+    if 'prefix: "win."' not in text:
+        raise ValueError("the ruleset has no win. node type to re-prefix")
+    ruleset.write_bytes(text.replace('prefix: "win."', 'prefix: "aux."', 1).encode("utf-8"))
+    linking = _NoteFile(vault_root, "cl.formats")
+    linking.replace_in_front_matter("[[win.first-to-target]]", "[[aux.first-to-target]]")
+    linking_path = linking.save()
+    note = _NoteFile(vault_root, "win.first-to-target")
+    old_path = note.path
+    note.rename_id("aux.first-to-target")
+    destination = note.save(old_path.with_name("aux.first-to-target.md"))
+    old_path.unlink()
+    return PlantedDefect(
+        "id-reserved-name",
+        _relative(vault_root, destination),
+        "aux.first-to-target",
+        ("aux.first-to-target",),
+        also_changed=(_relative(vault_root, ruleset), _relative(vault_root, linking_path)),
+    )
+
+
 def _id_duplicate(vault_root: Path) -> PlantedDefect:
     """Copy the host into another folder; two files with one stem and one id."""
     note = _NoteFile(vault_root, _HOST)
@@ -265,6 +292,7 @@ _VAULT_DEFECTS: dict[str, Callable[[Path], PlantedDefect]] = {
     ),
     "id-duplicate": _id_duplicate,
     "id-prefix-mismatch": lambda root: _rename_host(root, "id-prefix-mismatch", "kw.high-water"),
+    "id-reserved-name": _id_reserved_name,
     "type-unknown": lambda root: _edit_host(
         root, "type-unknown", lambda n: n.set_scalar("type", "tide-pattern")
     ),

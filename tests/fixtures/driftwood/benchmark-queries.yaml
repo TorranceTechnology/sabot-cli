@@ -108,7 +108,7 @@ queries:
   expect:
     order: exact
     rows:
-    - {id: con.launch-boat-command, distance: 1, edge: implemented-by}
+    - {id: cst.launch-boat-command, distance: 1, edge: implemented-by}
     - {id: ph.sail, distance: 1, edge: occurs-in}
     - {id: zone.hand, distance: 1, edge: requires}
     - {id: to.launch-boat, distance: 1, edge: tested-by}

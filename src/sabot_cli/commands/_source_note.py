@@ -4,10 +4,14 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
-from sabot_cli.sources import SourceError
-from sabot_cli.vault import load_yaml
+from sabot_cli.sources import SourceError, span_file_relative
+from sabot_cli.vault import (
+    FrontMatterError,
+    TextFileError,
+    parse_front_matter,
+    read_text,
+    split_front_matter,
+)
 
 _DELIMITER = "---"
 
@@ -75,7 +79,7 @@ def render(note: SourceNote) -> str:
         f"extractor: {_quoted(note.extractor)}",
         *_optional("supersedes", note.supersedes),
         *_optional("amends", note.amends),
-        f"spans: {_quoted(f'spans/{note.key}.jsonl')}",
+        f"spans: {_quoted(span_file_relative(note.key))}",
         _DELIMITER,
         "",
         f"# {note.title}",
@@ -88,10 +92,10 @@ def render(note: SourceNote) -> str:
 
 def with_segmenter(text: str, mode: str) -> str:
     """The note text with its `segmenter` property set to `mode`, nothing else changed."""
-    lines = text.split("\n")
-    closing = next((i for i in range(1, len(lines)) if lines[i].rstrip() == _DELIMITER), None)
-    if lines[0].rstrip() != _DELIMITER or closing is None:
-        raise SourceError("source-note-invalid", "the source note has no front matter")
+    try:
+        lines, closing = split_front_matter(text)
+    except FrontMatterError as error:
+        raise SourceError("source-note-invalid", "the source note has no front matter") from error
     carriage = "\r" if lines[0].endswith("\r") else ""
     entry = f"segmenter: {mode}{carriage}"
     for index in range(1, closing):
@@ -108,15 +112,13 @@ def registered_sha256(vault: Path, key: str) -> str | None:
     path = note_path(vault, key)
     if not path.is_file():
         return None
-    lines = path.read_bytes().decode("utf-8-sig").split("\n")
-    closing = next((i for i in range(1, len(lines)) if lines[i].rstrip() == _DELIMITER), None)
     try:
-        properties = load_yaml("\n".join(lines[1:closing])) if closing else None
-    except yaml.YAMLError as error:
+        properties, _ = parse_front_matter(read_text(path))
+    except (TextFileError, FrontMatterError) as error:
         raise SourceError(
-            "source-note-invalid", "the source note's front matter is not YAML"
+            "source-note-invalid", f"the source note cannot be read: {error}"
         ) from error
-    value = properties.get("sha256") if isinstance(properties, dict) else None
+    value = properties.get("sha256")
     if not isinstance(value, str):
         raise SourceError("source-note-invalid", "the source note records no sha256")
     return value

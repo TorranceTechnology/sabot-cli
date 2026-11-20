@@ -30,7 +30,7 @@ def test_outgoing_neighbours_at_depth_one(run_cli: CliRunner, driftwood_vault: P
     rows = result_rows(result)
     assert result.returncode == 0
     assert [(row["id"], row["distance"]) for row in rows] == [
-        ("con.launch-boat-command", 1),
+        ("cst.launch-boat-command", 1),
         ("ph.sail", 1),
         ("zone.hand", 1),
         ("to.launch-boat", 1),

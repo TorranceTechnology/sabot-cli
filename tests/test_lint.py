@@ -1,6 +1,5 @@
 """LNT-1, LNT-3 to LNT-5: `lint` over the clean vault, the strict switch and extensions."""
 
-from importlib.util import find_spec
 from pathlib import Path
 
 from conftest import CliResult, CliRunner
@@ -268,18 +267,3 @@ def test_list_classes_prints_a_table_for_people(run_cli: CliRunner, tmp_path: Pa
     lines = {line.split()[0]: line for line in result.stdout.splitlines()[1:]}
     assert lines["orphan"].endswith("warning (error under --strict)")
     assert lines["link-dangling"].endswith("error")
-
-
-def test_the_spans_shim_is_replaced_when_sabot_cli_sources_exists() -> None:
-    # Given that the checks read span files through rules/_checks/_spans_shim.py
-    # When the real `sabot_cli.sources` package appears
-    if find_spec("sabot_cli.sources") is None:
-        return
-    from sabot_cli.rules._checks import _spans_shim
-
-    # Then the shim must re-export it; this test fails until it does
-    assert _spans_shim.read_spans.__module__.startswith("sabot_cli.sources"), (
-        "sabot_cli.sources exists: replace the whole of rules/_checks/_spans_shim.py with "
-        "`from sabot_cli.sources import SpanIndex, SpanRecord, SpanRef, parse_span_ref, "
-        "read_spans`"
-    )

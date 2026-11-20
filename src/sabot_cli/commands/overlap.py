@@ -4,10 +4,11 @@ import argparse
 from pathlib import Path
 
 from sabot_cli import output
+from sabot_cli.commands._load import load_rules
 from sabot_cli.commands._options import Subparsers, add_json_option, add_vault_option
 from sabot_cli.exit_codes import ExitCode
 from sabot_cli.output import JsonValue
-from sabot_cli.rules import RulesetError, load_ruleset
+from sabot_cli.rules import RulesetError
 from sabot_cli.sources import (
     NoteOverlap,
     OverlapReport,
@@ -15,7 +16,6 @@ from sabot_cli.sources import (
     overlap,
     read_text_file,
 )
-from sabot_cli.vault import load_vault
 from sabot_cli.vault.paths import relative_within
 
 NAME = "overlap"
@@ -47,7 +47,7 @@ def run(args: argparse.Namespace) -> int:
     as_json = bool(args.json)
     vault: Path = args.vault
     try:
-        load_ruleset(vault)
+        rules = load_rules(vault)
         source_path: Path = args.source_text
         if _is_inside(source_path, vault):
             raise SourceError(
@@ -55,7 +55,7 @@ def run(args: argparse.Namespace) -> int:
                 "the source text must be kept outside the vault, which may be shared",
             )
         source = read_text_file(source_path)
-        loaded = load_vault(vault, frozenset())
+        loaded = rules.load_notes(vault)
         bodies = _select_bodies(
             vault, {n.path.as_posix(): n.body for n in loaded.notes.values()}, args.paths
         )

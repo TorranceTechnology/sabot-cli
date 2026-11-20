@@ -1,5 +1,5 @@
 ---
-id: con.launch-boat-command
+id: cst.launch-boat-command
 type: construct
 title: Launch command
 status: derived

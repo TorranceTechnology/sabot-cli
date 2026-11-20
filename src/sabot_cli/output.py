@@ -4,20 +4,23 @@ Keeping one writer is what makes output byte-identical across runs and operating
 systems: UTF-8, LF line endings and, for JSON, sorted keys and a fixed indent.
 """
 
-import json
 import sys
 from collections.abc import Mapping, Sequence
 
+from sabot_cli.canonical import FORMAT_VERSION, JsonValue, canonical_json
 from sabot_cli.exit_codes import ExitCode
 
-FORMAT_VERSION = 1
-
-type JsonValue = str | int | float | bool | Sequence[JsonValue] | Mapping[str, JsonValue] | None
-
-
-def canonical_json(document: Mapping[str, JsonValue]) -> str:
-    """Serialise a document to its canonical text, with a trailing newline."""
-    return json.dumps(document, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+__all__ = [
+    "FORMAT_VERSION",
+    "JsonValue",
+    "canonical_json",
+    "error_document",
+    "format_table",
+    "refuse",
+    "write_diagnostic",
+    "write_json",
+    "write_text",
+]
 
 
 def format_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:

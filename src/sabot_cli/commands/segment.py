@@ -1,30 +1,29 @@
 """The `segment` command."""
 
 import argparse
-import re
 from collections.abc import Sequence
 from pathlib import Path
 
 from sabot_cli import output
 from sabot_cli.commands import _source_note
+from sabot_cli.commands._load import load_rules
 from sabot_cli.commands._options import Subparsers, add_json_option, add_vault_option
 from sabot_cli.exit_codes import ExitCode
 from sabot_cli.output import JsonValue
-from sabot_cli.rules import RulesetError, load_ruleset
+from sabot_cli.rules import RulesetError
 from sabot_cli.sources import (
-    SOURCE_KEY_PATTERN,
     CheckResult,
     SegmentResult,
     SourceError,
+    check_key,
     read_text_file,
     segment,
+    span_file_relative,
 )
+from sabot_cli.vault import TextFileError, decode_text, encode_text
 from sabot_cli.vault.transaction import Transaction, TransactionError, atomic_write
 
 NAME = "segment"
-
-_KEY = re.compile(SOURCE_KEY_PATTERN)
-_BOM = b"\xef\xbb\xbf"
 
 
 def register(subparsers: Subparsers) -> None:
@@ -81,11 +80,8 @@ def _segment(args: argparse.Namespace, transaction: Transaction, *, as_json: boo
     vault: Path = args.vault
     key, mode = str(args.source), str(args.mode)
     try:
-        load_ruleset(vault)
-        if not _KEY.fullmatch(key):
-            raise SourceError(
-                "source-key-invalid", "a source key is lowercase letters, digits, . and -"
-            )
+        load_rules(vault)
+        check_key(key)
         note = _source_note.note_path(vault, key)
         if not note.is_file():
             raise SourceError(
@@ -132,20 +128,19 @@ def _updated_note(note: Path, mode: str) -> bytes:
     """The source note with its `segmenter` set, decoded as the vault reader decodes a note."""
     raw = note.read_bytes()
     try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError as error:
+        text = decode_text(raw, note.name)
+    except TextFileError as error:
         raise SourceError("source-note-invalid", "the source note is not valid UTF-8") from error
-    prefix = _BOM if raw.startswith(_BOM) else b""
-    return prefix + _source_note.with_segmenter(text, mode).encode("utf-8")
+    return encode_text(_source_note.with_segmenter(text, mode), like=raw)
 
 
 def _plan_writes(
     transaction: Transaction, key: str, mode: str, result: SegmentResult, note: bytes
 ) -> None:
-    transaction.put(f"spans/{key}.jsonl", result.span_file_text().encode("utf-8"))
+    transaction.put(span_file_relative(key), result.span_file_text().encode("utf-8"))
     boundaries = result.boundaries_text()
     if mode == "boundaries" and boundaries is not None:
-        transaction.put(f"spans/{key}.boundaries.jsonl", boundaries.encode("utf-8"))
+        transaction.put(span_file_relative(key, boundaries=True), boundaries.encode("utf-8"))
     transaction.put(_source_note.note_relative(key), note)
 
 
@@ -166,7 +161,7 @@ def _report(key: str, mode: str, result: SegmentResult, *, emitted: bool, as_jso
                 "command": NAME,
                 "format": output.FORMAT_VERSION,
                 "mode": mode,
-                "path": f"spans/{key}.jsonl",
+                "path": span_file_relative(key),
                 "sentences": result.sentence_count,
                 "source": key,
                 "spans": result.span_count,

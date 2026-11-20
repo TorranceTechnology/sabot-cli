@@ -8,8 +8,8 @@ from pathlib import Path
 
 import yaml
 
-from sabot_cli.output import JsonValue
-from sabot_cli.vault import load_yaml
+from sabot_cli.canonical import JsonValue
+from sabot_cli.vault import TextFileError, decode_text, encode_text, load_yaml, read_text
 
 RULESET_FILE = "_ruleset.yaml"
 _TOP_LEVEL_KEYS = frozenset({"ruleset", "schemaVersion", "sources", "scope", "extensions"})
@@ -138,8 +138,10 @@ def load_ruleset(root: Path) -> Ruleset:
     if not path.is_file():
         raise RulesetError("not-a-vault", f"the directory has no {RULESET_FILE}")
     try:
-        loaded = load_yaml(path.read_bytes().decode("utf-8-sig"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
+        loaded = load_yaml(read_text(path))
+    except TextFileError as error:
+        raise RulesetError("ruleset-invalid", str(error)) from error
+    except yaml.YAMLError as error:
         raise RulesetError("ruleset-invalid", f"{RULESET_FILE} cannot be read: {error}") from error
     return _parse(loaded)
 
@@ -271,7 +273,6 @@ def _optional_list(entry: Mapping[str, object], key: str, where: str) -> tuple[s
     return _text_list(entry[key], f"{where}.{key}")
 
 
-_BOM = b"\xef\xbb\xbf"
 _SOURCES_LINE = re.compile(r"^sources:(?P<rest>.*)$")
 _EMPTY_FLOW = re.compile(r"^\s*\[\s*\]\s*(?P<comment>#.*)?$")
 _BARE = re.compile(r"^\s*(?P<comment>#.*)?$")
@@ -317,7 +318,7 @@ def ruleset_with_source(root: Path, key: str, note_id: str, supersedes: str | No
     if any(source.key == key for source in ruleset.sources):
         raise RulesetError("source-key-registered", f"the source key {key!r} is already registered")
     raw = (root / RULESET_FILE).read_bytes()
-    before = raw.decode("utf-8-sig")
+    before = decode_text(raw, RULESET_FILE)
     lines = before.replace("\r\n", "\n").split("\n")
     entry = [f"  - key: {_scalar(key)}", f"    note: {_scalar(note_id)}"]
     if supersedes is not None:
@@ -327,7 +328,7 @@ def ruleset_with_source(root: Path, key: str, note_id: str, supersedes: str | No
     _check_registration(before, after, key, note_id, supersedes)
     if "\r\n" in before:
         after = after.replace("\n", "\r\n")
-    return (_BOM if raw.startswith(_BOM) else b"") + after.encode("utf-8")
+    return encode_text(after, like=raw)
 
 
 def _insert_entry(lines: list[str], entry: list[str]) -> None:

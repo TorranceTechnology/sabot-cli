@@ -5,18 +5,19 @@ from collections.abc import Iterator
 
 from sabot_cli.rules._checks._context import LintContext, is_present
 from sabot_cli.rules._checks._model import Report
-from sabot_cli.vault._load import FRONTMATTER_INVALID, ID_DUPLICATE
+from sabot_cli.vault import ProblemKind
+from sabot_cli.vault.paths import reserved_device_name
 
 
 def _check_frontmatter_invalid(ctx: LintContext) -> Iterator[Report]:
     for problem in ctx.vault.problems:
-        if problem.code == FRONTMATTER_INVALID:
+        if problem.kind is ProblemKind.UNREADABLE:
             yield Report(problem.path.as_posix(), None, problem.message)
 
 
 def _check_id_duplicate(ctx: LintContext) -> Iterator[Report]:
     for problem in ctx.vault.problems:
-        if problem.code == ID_DUPLICATE:
+        if problem.kind is ProblemKind.DUPLICATE_ID:
             # A problem carries no id; the file name is what a duplicate usually shares.
             yield Report(problem.path.as_posix(), problem.path.stem, problem.message)
 
@@ -37,6 +38,23 @@ def _check_id_malformed(ctx: LintContext) -> Iterator[Report]:
             continue
         if not isinstance(value, str) or not pattern.fullmatch(value):
             yield ctx.report(note, f"the id {value!r} does not match {pattern.pattern}")
+
+
+def _check_id_reserved_name(ctx: LintContext) -> Iterator[Report]:
+    for note in ctx.notes:
+        declared = note.properties.get("id")
+        if isinstance(declared, str) and reserved_device_name(declared):
+            yield ctx.report(
+                note,
+                f"the id {declared!r} starts with a name Windows reserves for a device, "
+                "so a note file named for it cannot be checked out there",
+            )
+        if reserved_device_name(note.path.name):
+            yield ctx.report(
+                note,
+                f"the file name {note.path.name} starts with a name Windows reserves for a "
+                "device, so it cannot be checked out there",
+            )
 
 
 def _check_id_file_mismatch(ctx: LintContext) -> Iterator[Report]:

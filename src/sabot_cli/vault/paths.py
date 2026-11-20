@@ -3,6 +3,24 @@
 import os
 from pathlib import Path, PurePosixPath
 
+# Windows refuses these names as a file name with any extension, so `con.x.md` cannot be
+# checked out there; Git for Windows turns such a path away.
+_DEVICE_NAMES = frozenset(
+    {
+        "con",
+        "prn",
+        "aux",
+        "nul",
+        *(f"com{n}" for n in range(1, 10)),
+        *(f"lpt{n}" for n in range(1, 10)),
+    }
+)
+
+
+def reserved_device_name(name: str) -> bool:
+    """Whether the part of `name` before its first dot is a Windows device name, in any case."""
+    return name.split(".", 1)[0].lower() in _DEVICE_NAMES
+
 
 def relative_within(path: Path, root: Path) -> PurePosixPath | None:
     """`path` relative to `root`, or None when it lies outside.

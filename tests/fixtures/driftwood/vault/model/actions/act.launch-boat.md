@@ -19,7 +19,7 @@ requires:
 triggers:
   - "[[tp.boat-launched]]"
 implemented-by:
-  - "[[con.launch-boat-command]]"
+  - "[[cst.launch-boat-command]]"
 tested-by:
   - "[[to.launch-boat]]"
 ---

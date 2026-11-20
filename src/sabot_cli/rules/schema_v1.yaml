@@ -295,7 +295,7 @@ node-types:
     side: model
     note: An edge written as a note so it can carry qualifiers.
   construct:
-    prefix: con.
+    prefix: cst.
     side: build
     note: A named artefact of the generated game.
   test-obligation:

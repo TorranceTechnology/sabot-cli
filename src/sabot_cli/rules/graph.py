@@ -7,12 +7,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from sabot_cli.output import FORMAT_VERSION, JsonValue, canonical_json
+from sabot_cli.canonical import FORMAT_VERSION, JsonValue, canonical_json
 from sabot_cli.rules.ruleset import RULESET_FILE, Ruleset
 from sabot_cli.rules.schema import Schema, merge_extensions
+from sabot_cli.sources import SPANS_DIRECTORY
 from sabot_cli.vault import Vault
 
-_SPANS_DIRECTORY = "spans"
+_SPAN_FILE_PATTERN = "*.jsonl"
 
 
 @dataclass(frozen=True)
@@ -157,15 +158,20 @@ def _paraphrase(body: str) -> str:
 
 
 def _digest(vault: Vault) -> str:
-    """SHA-256 over the sorted paths and bytes of the notes, the ruleset file and the span files."""
+    """SHA-256 over the sorted paths and bytes of the notes, the ruleset file and the span files.
+
+    Each file contributes its relative path and the SHA-256 of its bytes. The span files are the
+    `*.jsonl` files directly under `spans/`; a hidden file there, such as one a file manager
+    leaves behind, or any other file does not change the digest.
+    """
     files = {note.path for note in vault.notes.values()}
     files.add(PurePosixPath(RULESET_FILE))
-    spans = vault.root / _SPANS_DIRECTORY
+    spans = vault.root / SPANS_DIRECTORY
     if spans.is_dir():
         files.update(
             PurePosixPath(path.relative_to(vault.root).as_posix())
-            for path in spans.rglob("*")
-            if path.is_file()
+            for path in spans.glob(_SPAN_FILE_PATTERN)
+            if path.is_file() and not path.name.startswith(".")
         )
     digest = hashlib.sha256()
     for relative in sorted(files, key=lambda path: path.as_posix()):

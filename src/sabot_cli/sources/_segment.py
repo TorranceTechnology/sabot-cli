@@ -1,10 +1,9 @@
 """`segment`: choose a mode, build items, hash them into span records and check the result."""
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sabot_cli.output import JsonValue
+from sabot_cli.canonical import JsonValue
 from sabot_cli.sources import _boundaries, _builders
 from sabot_cli.sources._items import Item
 from sabot_cli.sources._lines import JoinedText, LineIndex
@@ -12,11 +11,12 @@ from sabot_cli.sources._normalise import LEADING_NUMBER, digest, editorial, norm
 from sabot_cli.sources._records import SpanRecord, span_file_text
 from sabot_cli.sources._self_checks import SELF_CHECKS, CheckResult, merge, run_self_checks
 from sabot_cli.sources._sentences import split_sentences
+from sabot_cli.sources._spanref import sentence_locator
 from sabot_cli.sources._types import (
-    SOURCE_KEY_PATTERN,
     Numbering,
     SegmentMode,
     SourceError,
+    check_key,
 )
 
 
@@ -72,10 +72,7 @@ def segment(
     text of a boundaries file and is required, and only used, in `boundaries` mode. A refused
     input raises `SourceError`; a result whose checks fail is returned with its findings.
     """
-    if not re.fullmatch(SOURCE_KEY_PATTERN, source_key):
-        raise SourceError(
-            "source-key-invalid", "a source key is lowercase letters, digits, . and -"
-        )
+    check_key(source_key)
     if skip_pages < 0:
         raise SourceError("skip-pages-invalid", "the number of pages to skip cannot be negative")
     if (boundaries is None) != (mode != "boundaries"):
@@ -156,7 +153,7 @@ def _records(source: str, items: Sequence[Item], index: LineIndex) -> tuple[Span
         if len(ranges) > 1:
             for number, (begin, end) in enumerate(ranges, start=1):
                 sentence = joined.text[begin:end]
-                locator = f"{item.locator}/s{number}"
+                locator = sentence_locator(item.locator, number)
                 records.append(
                     SpanRecord(
                         span=f"{source}#{locator}",

@@ -13,6 +13,7 @@ from typing import Literal
 from sabot_cli.sources._lines import LineIndex
 from sabot_cli.sources._normalise import digest, normalise
 from sabot_cli.sources._records import SpanIndex, SpanRecord
+from sabot_cli.sources._scope import in_scope
 from sabot_cli.sources._types import SourceError
 
 type Fate = Literal["unchanged", "editorial", "substantive", "removed", "moved"]
@@ -156,31 +157,7 @@ def _key_of(index: SpanIndex) -> str:
 def _spans_in_scope(index: SpanIndex, scope: Sequence[str]) -> dict[str, SpanRecord]:
     """Span records (not sentence records) by locator, in document order, within the scope."""
     spans = {record.locator: record for record in index.records if record.kind == "span"}
-    if not scope:
-        return spans
-    return {
-        locator: record
-        for locator, record in spans.items()
-        if any(
-            _under(ancestor, prefix) for ancestor in _ancestry(record, spans) for prefix in scope
-        )
-    }
-
-
-def _ancestry(record: SpanRecord, spans: Mapping[str, SpanRecord]) -> list[str]:
-    """The record's locator and those of its parents, so `4.2a` lies under the prefix `4.2`."""
-    chain = [record.locator]
-    parent = record.parent
-    while parent is not None and parent in spans and parent not in chain:
-        chain.append(parent)
-        parent = spans[parent].parent
-    return chain
-
-
-def _under(locator: str, prefix: str) -> bool:
-    """The locator is the prefix or continues it at a `.` or `/` boundary, so `1` holds `1.1`
-    and `1/a` but not `10`."""
-    return locator == prefix or locator.startswith((f"{prefix}.", f"{prefix}/"))
+    return {locator: record for locator, record in spans.items() if in_scope(record, spans, scope)}
 
 
 def _match_moves(

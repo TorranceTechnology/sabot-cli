@@ -208,6 +208,41 @@ def test_digest_ignores_the_vault_location_and_file_creation_order(
     assert (driftwood_vault / GRAPH).read_bytes() == (driftwood_vault_twin / GRAPH).read_bytes()
 
 
+def test_digest_ignores_files_in_spans_that_are_not_span_files(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given the digest of the clean vault
+    before = run_cli("compile", "--vault", str(driftwood_vault), "--json").json()["vaultDigest"]
+
+    # When a file manager's hidden file, a stray text file and a nested file appear in spans/
+    spans = driftwood_vault / "spans"
+    (spans / ".DS_Store").write_bytes(b"\x00\x01 finder")
+    (spans / "notes.txt").write_text("scratch\n", encoding="utf-8")
+    (spans / ".hidden.jsonl").write_text("{}\n", encoding="utf-8")
+    (spans / "old").mkdir()
+    (spans / "old" / "dw0.jsonl").write_text("{}\n", encoding="utf-8")
+    after = run_cli("compile", "--vault", str(driftwood_vault), "--json").json()["vaultDigest"]
+
+    # Then the digest is unchanged, so the committed graph still reads as up to date
+    assert after == before
+    assert run_cli("compile", "--check", "--vault", str(driftwood_vault)).returncode == 0
+
+
+def test_digest_follows_the_content_of_a_span_file(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given the digest of the clean vault
+    before = run_cli("compile", "--vault", str(driftwood_vault), "--json").json()["vaultDigest"]
+
+    # When a span file changes, here by a trailing blank line the reader ignores
+    span_file = driftwood_vault / "spans" / "dw1.jsonl"
+    span_file.write_bytes(span_file.read_bytes() + b"\n")
+    after = run_cli("compile", "--vault", str(driftwood_vault), "--json").json()["vaultDigest"]
+
+    # Then the digest changes
+    assert after != before
+
+
 @pytest.mark.parametrize(
     ("replacement", "code"),
     [

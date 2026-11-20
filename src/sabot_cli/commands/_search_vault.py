@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from sabot_cli import output
-from sabot_cli.rules import load_ruleset, load_schema, merge_extensions
+from sabot_cli.commands._load import load_rules
 from sabot_cli.search import EdgeSpec
 from sabot_cli.vault import Vault, load_vault
 
@@ -14,12 +14,12 @@ def load_searchable(root: Path) -> tuple[Vault, EdgeSpec]:
     Raises `RulesetError` when the ruleset cannot be loaded. A note that cannot be read is
     left out of the vault and named on stderr, so the command still answers from the rest.
     """
-    ruleset = load_ruleset(root)
-    schema = merge_extensions(load_schema(ruleset.schema_version), ruleset)
+    rules = load_rules(root)
     edges = EdgeSpec(
-        names=frozenset(schema.edge_types),
-        inverse_of={name: edge.inverse for name, edge in schema.edge_types.items()},
+        names=frozenset(rules.schema.edge_types),
+        inverse_of={name: edge.inverse for name, edge in rules.schema.edge_types.items()},
     )
+    # Only the names an author writes are read as links; an authored inverse is lint's to report.
     vault = load_vault(root, edges.names)
     for problem in vault.problems:
         output.write_diagnostic(f"skipped {problem.path.as_posix()}: {problem.message}")

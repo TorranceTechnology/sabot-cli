@@ -74,3 +74,34 @@ def test_c_and_pure_loaders_both_refuse_malformed_documents() -> None:
     for loader in (PureSafeStringLoader, C_SAFE_STRING_LOADER):
         with pytest.raises(yaml.YAMLError):
             yaml.load("a: [unclosed", Loader=loader)
+
+
+_DUPLICATE_KEYS = [
+    "a: 1\na: 2",
+    "a: 1\nb: 2\na: 1",
+    "a:\n  b: 1\n  b: 2",
+    "a: {b: 1, b: 2}",
+    "a:\n  - {x: 1, x: 1}",
+    "a: 1\n'a': 2",
+]
+
+
+@pytest.mark.parametrize("loader", _loaders(), ids=lambda loader: loader.__name__)
+@pytest.mark.parametrize("text", _DUPLICATE_KEYS)
+def test_loader_refuses_a_mapping_that_names_a_key_twice(loader: type, text: str) -> None:
+    # Given a document with a repeated key, at the top, nested or in a flow mapping
+    # When it is parsed with either loader base
+    # Then the load fails and the message names the key
+    with pytest.raises(yaml.YAMLError) as refused:
+        yaml.load(text, Loader=loader)
+    assert "duplicate key" in str(refused.value)
+
+
+@pytest.mark.parametrize("loader", _loaders(), ids=lambda loader: loader.__name__)
+def test_loader_still_accepts_the_same_key_in_different_mappings(loader: type) -> None:
+    # Given the same key in two sibling mappings, which is not a repeat
+    # When the document is parsed
+    loaded = yaml.load("a: {x: 1}\nb: {x: 2}\nc:\n  - {x: 3}\n  - {x: 4}", Loader=loader)
+
+    # Then it loads
+    assert loaded == {"a": {"x": 1}, "b": {"x": 2}, "c": [{"x": 3}, {"x": 4}]}

@@ -8,18 +8,18 @@ from pathlib import Path
 
 from sabot_cli import output
 from sabot_cli.commands import _source_note
+from sabot_cli.commands._load import load_rules
 from sabot_cli.commands._options import Subparsers, add_json_option, add_vault_option
 from sabot_cli.exit_codes import ExitCode
 from sabot_cli.output import JsonValue
-from sabot_cli.rules import RulesetError, load_ruleset, ruleset_with_source
-from sabot_cli.rules.ruleset import RULESET_FILE
+from sabot_cli.rules import RULESET_FILE, RulesetError, ruleset_with_source
 from sabot_cli.sources import (
     DEFAULT_EXTRACTOR,
     EXTRACTORS,
-    SOURCE_KEY_PATTERN,
     ExtractedText,
     SourceError,
     SourceFormat,
+    check_key,
     extract_text,
 )
 from sabot_cli.vault.paths import display_path, relative_within
@@ -108,16 +108,10 @@ def run(args: argparse.Namespace) -> int:
     as_json = bool(args.json)
     vault: Path = args.vault
     key = str(args.key)
-    if not re.fullmatch(SOURCE_KEY_PATTERN, key):
-        return output.refuse(
-            NAME,
-            "source-key-invalid",
-            "a source key is lowercase letters, digits, . and -, starting with a letter or digit",
-            as_json=as_json,
-        )
     try:
-        load_ruleset(vault)
-    except RulesetError as error:
+        check_key(key)
+        load_rules(vault)
+    except (RulesetError, SourceError) as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
     try:
         data = Path(args.file).read_bytes()
@@ -147,7 +141,7 @@ def _register(
     """Plan every output inside the write lock, then publish them together."""
     vault: Path = args.vault
     try:
-        registered = {source.key for source in load_ruleset(vault).sources}
+        registered = {source.key for source in load_rules(vault).ruleset.sources}
         refusal = _refusal(args, key, registered, data)
         if refusal is not None:
             return output.refuse(NAME, refusal[0], refusal[1], as_json=as_json)

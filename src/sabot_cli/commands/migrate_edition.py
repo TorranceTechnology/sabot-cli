@@ -5,21 +5,21 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from sabot_cli import output
+from sabot_cli.commands._load import load_rules
+from sabot_cli.commands._migrate_text import rewrite_note_text
 from sabot_cli.commands._options import Subparsers, add_json_option, add_vault_option
 from sabot_cli.exit_codes import ExitCode
 from sabot_cli.output import JsonValue
-from sabot_cli.rules import RulesetError, load_ruleset
+from sabot_cli.rules import RulesetError
 from sabot_cli.sources import (
     NoteMigration,
     SourceError,
     check_key,
     diff_editions,
     plan_note_migration,
-    read_edition_spans,
-    rewrite_note_text,
-    stale_reason_to_write,
+    read_span_file,
 )
-from sabot_cli.vault import load_vault
+from sabot_cli.vault import TextFileError, decode_text, encode_text
 from sabot_cli.vault.transaction import Transaction, TransactionError
 
 NAME = "migrate-edition"
@@ -59,15 +59,15 @@ def _migrate(args: argparse.Namespace, transaction: Transaction | None, *, as_js
     old_key, new_key = str(args.old_key), str(args.new_key)
     dry_run = transaction is None
     try:
-        load_ruleset(vault)
+        rules = load_rules(vault)
         check_key(old_key)
         check_key(new_key)
         if old_key == new_key:
             raise SourceError("editions-identical", "an edition cannot be migrated to itself")
-        old = read_edition_spans(vault, old_key)
-        new = read_edition_spans(vault, new_key)
+        old = read_span_file(vault, old_key)
+        new = read_span_file(vault, new_key)
         diff = diff_editions(old, new)
-        loaded = load_vault(vault, frozenset())
+        loaded = rules.load_notes(vault)
         outcomes: dict[str, list[str]] = {name: [] for name in _OUTCOME_NAMES}
         unresolved: list[tuple[str, str]] = []
         edits: dict[str, bytes] = {}
@@ -79,17 +79,17 @@ def _migrate(args: argparse.Namespace, transaction: Transaction | None, *, as_js
                 continue
             unresolved += [(note.id, raw) for raw in migration.unresolved]
             _file_outcome(outcomes, migration)
-            reason = stale_reason_to_write(note.properties, migration.reason)
+            reason = migration.reason_to_write(note.properties)
             if not migration.repoints and reason is None:
                 continue
-            file = vault / note.path
-            before = file.read_bytes().decode("utf-8")
+            raw = (vault / note.path).read_bytes()
+            before = decode_text(raw, note.path.name)
             after = rewrite_note_text(before, migration.repoints, reason)
             if after != before:
-                edits[note.path.as_posix()] = after.encode("utf-8")
+                edits[note.path.as_posix()] = encode_text(after, like=raw)
     except RulesetError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
-    except (SourceError, OSError, UnicodeDecodeError) as error:
+    except (SourceError, OSError, TextFileError) as error:
         code = error.code if isinstance(error, SourceError) else "note-unreadable"
         message = error.message if isinstance(error, SourceError) else "a note cannot be read"
         return output.refuse(NAME, code, message, as_json=as_json)

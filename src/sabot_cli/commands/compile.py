@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from sabot_cli import output
+from sabot_cli.commands._load import Rules, load_rules
 from sabot_cli.commands._options import (
     Subparsers,
     add_json_option,
@@ -13,18 +14,14 @@ from sabot_cli.commands._options import (
 from sabot_cli.exit_codes import ExitCode
 from sabot_cli.output import JsonValue
 from sabot_cli.rules import (
+    BuildProblem,
+    Graph,
     RulesetError,
+    Severity,
     compile_graph,
     lint,
-    load_ruleset,
-    load_schema,
-    merge_extensions,
 )
-from sabot_cli.rules.graph import BuildProblem, Graph
-from sabot_cli.rules.lint import Severity
-from sabot_cli.rules.ruleset import Ruleset
-from sabot_cli.rules.schema import Schema
-from sabot_cli.vault import Vault, load_vault
+from sabot_cli.vault import Vault
 from sabot_cli.vault.paths import display_path, relative_within
 from sabot_cli.vault.transaction import Transaction, TransactionError, atomic_write
 
@@ -43,11 +40,11 @@ def register(subparsers: Subparsers) -> None:
     add_json_option(parser)
 
 
-def _lint_errors(vault: Vault, schema: Schema, ruleset: Ruleset) -> tuple[BuildProblem, ...]:
+def _lint_errors(vault: Vault, rules: Rules) -> tuple[BuildProblem, ...]:
     """The errors `lint` reports without `--strict`: what stops a compile."""
     return tuple(
         BuildProblem(finding.code, finding.note, finding.path, finding.message)
-        for finding in lint(vault, schema, ruleset)
+        for finding in lint(vault, rules.fixed_schema, rules.ruleset)
         if finding.severity is Severity.ERROR
     )
 
@@ -76,16 +73,15 @@ def _compile(
 ) -> int:
     root: Path = args.vault
     try:
-        ruleset = load_ruleset(root)
-        schema = load_schema(ruleset.schema_version)
-        vault = load_vault(root, merge_extensions(schema, ruleset).link_properties)
+        rules = load_rules(root)
     except RulesetError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
-    problems = _lint_errors(vault, schema, ruleset)
+    vault = rules.load_notes(root)
+    problems = _lint_errors(vault, rules)
     if problems:
         _report_problems(problems, as_json=as_json)
         return int(ExitCode.FINDINGS)
-    graph = compile_graph(vault, schema, ruleset)
+    graph = compile_graph(vault, rules.fixed_schema, rules.ruleset)
     text = graph.to_json()
     shown = display_path(target, root)
     if args.check:

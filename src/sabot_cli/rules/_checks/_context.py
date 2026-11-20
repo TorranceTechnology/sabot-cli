@@ -5,18 +5,10 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from sabot_cli.rules._checks._model import Report
-from sabot_cli.rules._checks._spans_shim import (
-    SpanFileError,
-    SpanIndex,
-    SpanRef,
-    parse_span_ref,
-    read_spans,
-)
 from sabot_cli.rules.ruleset import Ruleset
 from sabot_cli.rules.schema import Schema
+from sabot_cli.sources import SourceError, SpanIndex, SpanRef, parse_span_ref, read_span_file
 from sabot_cli.vault import Note, Vault
-
-SPANS_DIRECTORY = "spans"
 
 
 @dataclass(frozen=True)
@@ -139,12 +131,8 @@ class LintContext:
     def span_index(self, key: str) -> tuple[SpanIndex | None, str | None]:
         """The span file of a source key, read once, or None with the reason it cannot be."""
         if key not in self._spans:
-            path = self.vault.root / SPANS_DIRECTORY / f"{key}.jsonl"
-            if not path.is_file():
-                self._spans[key] = (None, f"there is no span file {SPANS_DIRECTORY}/{key}.jsonl")
-            else:
-                try:
-                    self._spans[key] = (read_spans(path), None)
-                except SpanFileError as error:
-                    self._spans[key] = (None, str(error))
+            try:
+                self._spans[key] = (read_span_file(self.vault.root, key), None)
+            except SourceError as error:
+                self._spans[key] = (None, error.message)
         return self._spans[key]

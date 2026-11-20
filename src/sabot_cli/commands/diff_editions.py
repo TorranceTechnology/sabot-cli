@@ -5,10 +5,11 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from sabot_cli import output
+from sabot_cli.commands._load import load_rules
 from sabot_cli.commands._options import Subparsers, add_json_option, add_vault_option
 from sabot_cli.exit_codes import ExitCode
 from sabot_cli.output import JsonValue
-from sabot_cli.rules import RulesetError, load_ruleset
+from sabot_cli.rules import RulesetError
 from sabot_cli.sources import (
     EditionDiff,
     SourceError,
@@ -17,10 +18,10 @@ from sabot_cli.sources import (
     diff_editions,
     plan_note_migration,
     read_edition_ranges,
-    read_edition_spans,
+    read_span_file,
     read_text_file,
 )
-from sabot_cli.vault import load_vault
+from sabot_cli.vault import Vault
 
 NAME = "diff-editions"
 
@@ -57,13 +58,13 @@ def run(args: argparse.Namespace) -> int:
     old_key, new_key = str(args.old_key), str(args.new_key)
     scope: list[str] = list(args.scope)
     try:
-        load_ruleset(vault)
+        rules = load_rules(vault)
         check_key(old_key)
         check_key(new_key)
         if old_key == new_key:
             raise SourceError("editions-identical", "an edition cannot be compared with itself")
-        old = read_edition_spans(vault, old_key)
-        new = read_edition_spans(vault, new_key)
+        old = read_span_file(vault, old_key)
+        new = read_span_file(vault, new_key)
         old_text = None if args.old_text is None else read_text_file(args.old_text)
         new_text = None if args.new_text is None else read_text_file(args.new_text)
         diff = diff_editions(
@@ -75,7 +76,7 @@ def run(args: argparse.Namespace) -> int:
             old_ranges=read_edition_ranges(vault, old_key),
             new_ranges=read_edition_ranges(vault, new_key),
         )
-        affected = _affected_notes(vault, diff, old, new)
+        affected = _affected_notes(rules.load_notes(vault), diff, old, new)
     except RulesetError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
     except SourceError as error:
@@ -88,10 +89,10 @@ def run(args: argparse.Namespace) -> int:
     return int(ExitCode.OK)
 
 
-def _affected_notes(vault: Path, diff: EditionDiff, old: SpanIndex, new: SpanIndex) -> list[str]:
+def _affected_notes(vault: Vault, diff: EditionDiff, old: SpanIndex, new: SpanIndex) -> list[str]:
     """Ids of notes citing an old span that is substantive, removed or moved: the re-review set."""
     found: list[str] = []
-    for note in sorted(load_vault(vault, frozenset()).notes.values(), key=lambda n: n.id):
+    for note in sorted(vault.notes.values(), key=lambda n: n.id):
         cited = note.properties.get("source")
         citations = [c for c in cited if isinstance(c, str)] if isinstance(cited, list) else []
         migration = plan_note_migration(note.id, citations, diff, old, new)

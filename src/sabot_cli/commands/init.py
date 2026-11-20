@@ -7,14 +7,15 @@ from pathlib import Path
 from sabot_cli import output
 from sabot_cli.commands._options import Subparsers, add_json_option
 from sabot_cli.exit_codes import ExitCode
-from sabot_cli.rules.ruleset import RULESET_FILE
+from sabot_cli.rules import RULESET_FILE
+from sabot_cli.sources import SPANS_DIRECTORY
 from sabot_cli.vault.transaction import LOCK_FILE, Transaction, TransactionError
 
 NAME = "init"
 
 _RULESET_ID = re.compile(r"^[a-z][a-z0-9-]*$")
 _FOLDERS: tuple[str, ...] = (
-    "spans",
+    SPANS_DIRECTORY,
     "sources",
     "clauses",
     "terms",

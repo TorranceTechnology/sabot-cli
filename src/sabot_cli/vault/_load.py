@@ -5,10 +5,8 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
 from sabot_cli.vault import _frontmatter, _links, _walk
-from sabot_cli.vault._model import Link, Note, Problem, Vault
-
-FRONTMATTER_INVALID = "frontmatter-invalid"
-ID_DUPLICATE = "id-duplicate"
+from sabot_cli.vault._model import Link, Note, Problem, ProblemKind, Vault
+from sabot_cli.vault.text import TextFileError, read_text
 
 
 def load_vault(root: Path, link_properties: frozenset[str]) -> Vault:
@@ -25,23 +23,24 @@ def load_vault(root: Path, link_properties: frozenset[str]) -> Vault:
     for file in _walk.note_files(root):
         relative = PurePosixPath(file.relative_to(root).as_posix())
         try:
-            text = file.read_bytes().decode("utf-8-sig")
-            properties, body = _frontmatter.parse(text)
-        except (OSError, UnicodeDecodeError) as error:
-            reason = (
-                "is not valid UTF-8" if isinstance(error, UnicodeDecodeError) else "is unreadable"
-            )
-            problems.append(Problem(relative, FRONTMATTER_INVALID, f"the file {reason}"))
+            properties, body = _frontmatter.parse(read_text(file))
+        except TextFileError as error:
+            reason = "is not valid UTF-8" if error.reason == "undecodable" else "is unreadable"
+            problems.append(Problem(relative, ProblemKind.UNREADABLE, f"the file {reason}"))
             continue
         except _frontmatter.FrontMatterError as error:
-            problems.append(Problem(relative, FRONTMATTER_INVALID, str(error)))
+            problems.append(Problem(relative, ProblemKind.UNREADABLE, str(error)))
             continue
         declared = properties.get("id")
         note_id = declared if isinstance(declared, str) and declared else file.stem
         if note_id in notes:
             first = notes[note_id].path.as_posix()
             problems.append(
-                Problem(relative, ID_DUPLICATE, f"the id {note_id!r} is already used by {first}")
+                Problem(
+                    relative,
+                    ProblemKind.DUPLICATE_ID,
+                    f"the id {note_id!r} is already used by {first}",
+                )
             )
             continue
         notes[note_id] = Note(

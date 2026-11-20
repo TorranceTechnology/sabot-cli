@@ -7,13 +7,16 @@ from pathlib import Path
 from sabot_cli import output
 from sabot_cli.commands._options import Subparsers, add_json_option, add_vault_option
 from sabot_cli.exit_codes import ExitCode
-from sabot_cli.rules import RulesetError, load_ruleset, load_schema, merge_extensions
-from sabot_cli.rules.lint import (
+from sabot_cli.rules import (
     LINT_CLASSES,
     Finding,
+    RulesetError,
     Severity,
     effective_severity,
     lint,
+    load_ruleset,
+    load_schema,
+    merge_extensions,
     ruleset_load_failure,
 )
 from sabot_cli.vault import load_vault

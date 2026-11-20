@@ -13,6 +13,7 @@ from sabot_cli.rules.ruleset import (
     Ruleset,
     RulesetError,
 )
+from sabot_cli.sources import is_source_key
 from sabot_cli.vault import load_yaml
 
 SUPPORTED_VERSION = 1
@@ -272,7 +273,7 @@ def _source_problems(ruleset: Ruleset, note_ids: Collection[str] | None) -> list
     problems: list[str] = []
     keys = [source.key for source in ruleset.sources]
     for source in ruleset.sources:
-        if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", source.key):
+        if not is_source_key(source.key):
             problems.append(f"source key {source.key!r} is not a valid key")
         if keys.count(source.key) > 1:
             problems.append(f"source key {source.key!r} is registered more than once")

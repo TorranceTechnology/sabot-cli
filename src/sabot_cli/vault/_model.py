@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
 
@@ -28,12 +29,19 @@ class Note:
     links: tuple[Link, ...]
 
 
+class ProblemKind(StrEnum):
+    """Why the reader could not use a file."""
+
+    UNREADABLE = "unreadable"
+    DUPLICATE_ID = "duplicate-id"
+
+
 @dataclass(frozen=True)
 class Problem:
     """A file the reader could not turn into a note, or could not keep."""
 
     path: PurePosixPath
-    code: str
+    kind: ProblemKind
     message: str
 
 

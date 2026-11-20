@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from sabot_cli import output
+from sabot_cli.commands._load import load_rules
 from sabot_cli.commands._options import (
     Subparsers,
     add_json_option,
@@ -12,8 +13,15 @@ from sabot_cli.commands._options import (
 )
 from sabot_cli.exit_codes import ExitCode
 from sabot_cli.output import JsonValue
-from sabot_cli.rules import RulesetError, load_ruleset, load_schema, merge_extensions
-from sabot_cli.rules.schema import Attribute, EdgeType, NodeType, Requirement, Schema
+from sabot_cli.rules import (
+    Attribute,
+    EdgeType,
+    NodeType,
+    Requirement,
+    RulesetError,
+    Schema,
+    load_schema,
+)
 
 NAME = "schema"
 
@@ -35,9 +43,9 @@ def run(args: argparse.Namespace) -> int:
     try:
         schema = load_schema()
         if vault_root is not None:
-            ruleset = load_ruleset(vault_root)
-            schema = merge_extensions(load_schema(ruleset.schema_version), ruleset)
-            ruleset_id = ruleset.ruleset
+            rules = load_rules(vault_root)
+            schema = rules.schema
+            ruleset_id = rules.ruleset.ruleset
     except RulesetError as error:
         return output.refuse(NAME, error.code, error.message, as_json=as_json)
     node_name: str | None = args.type

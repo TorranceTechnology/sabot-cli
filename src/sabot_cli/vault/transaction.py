@@ -34,6 +34,8 @@ from pathlib import Path, PurePosixPath
 from types import FrameType, TracebackType
 from typing import Literal, Self
 
+from sabot_cli.vault.text import TextFileError, read_text
+
 __all__ = [
     "LOCK_FILE",
     "Checkpoint",
@@ -304,8 +306,8 @@ def recover(root: Path) -> Recovery:
         journal_file = directory / _JOURNAL_FILE
         if journal_file.is_file():
             try:
-                text = journal_file.read_bytes().decode("utf-8")
-            except (OSError, UnicodeDecodeError) as error:
+                text = read_text(journal_file)
+            except TextFileError as error:
                 raise TransactionError("journal-invalid", f"{name} cannot be read") from error
             problems = _undo(root, _Journal.from_json(text), directory)
             if problems:

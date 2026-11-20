@@ -16,7 +16,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from sabot_cli.output import JsonValue
+from sabot_cli.canonical import JsonValue
 from sabot_cli.sources._items import Item
 from sabot_cli.sources._lines import LineIndex, is_page_furniture
 from sabot_cli.sources._records import dump_compact

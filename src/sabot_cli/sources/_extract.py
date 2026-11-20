@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pypdf
 
+from sabot_cli.sources._files import read_text_file
 from sabot_cli.sources._types import ExtractedText, SourceError, SourceFormat
 
 # Names `--extractor` accepts for PDF input, the default first. An entry here and a branch in
@@ -34,14 +35,7 @@ def extract_text(
     """
     if fmt == "pdf":
         return _extract_pdf(path, extractor)
-    try:
-        text = path.read_bytes().decode("utf-8")
-    except OSError as error:
-        raise SourceError(
-            "file-unreadable", f"the file cannot be read: {error.strerror}"
-        ) from error
-    except UnicodeDecodeError as error:
-        raise SourceError("text-undecodable", "the file is not valid UTF-8") from error
+    text = read_text_file(path)
     if fmt == "html":
         return ExtractedText(_html_to_text(text), "html-stdlib")
     return ExtractedText(text, "text")

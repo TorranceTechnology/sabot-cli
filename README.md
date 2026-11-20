@@ -159,7 +159,7 @@ The example exits 0. Exit codes: 0 no errors; 1 at least one error; 3 the direct
 
 ### compile
 
-Writes the machine graph: every note with its attributes and paraphrase, every authored edge, every inverse edge (marked derived), the ruleset's extensions and a digest of the notes, `_ruleset.yaml` and the span files. It refuses to run on a vault that has lint errors. The default path is `_index/graph.json` in the vault. `--check` writes nothing and tells whether the file at that path is current. `--out` may not name a directory or a note of the vault (`out-is-a-directory`, `out-is-a-note`).
+Writes the machine graph: every note with its attributes and paraphrase, every authored edge, every inverse edge (marked derived), the ruleset's extensions and a digest of the notes, `_ruleset.yaml` and the `*.jsonl` span files directly in `spans/` (a hidden or stray file there does not change it). It refuses to run on a vault that has lint errors. The default path is `_index/graph.json` in the vault. `--check` writes nothing and tells whether the file at that path is current. `--out` may not name a directory or a note of the vault (`out-is-a-directory`, `out-is-a-note`).
 
 ```text
 usage: sabot compile [-h] [--out PATH] [--check] [--vault PATH] [--json]
@@ -176,14 +176,14 @@ notes           54
 authored edges  66
 derived edges   66
 extensions      2
-vault digest    2bf97e776aefae7c17c89269f8f12da333a9ca10fd9757aaa60482f3567e1806
+vault digest    9ffbddbbb3e482ff44a64ff864786d1ddb013a4140b46be477697bba77a914d1
 ```
 
 The example exits 0. Exit codes: 0 written, or `--check` and current; 1 the vault has lint errors (listed, nothing written), or `--check` and the file is missing or out of date; 3 the directory is not a vault or its ruleset is unusable. JSON document keys: `authoredEdges`, `authoredEdgesByType`, `command`, `compiled`, `derivedEdges`, `derivedEdgesByType`, `extensionCount`, `extensionsByKind`, `format`, `notes`, `notesByType`, `path`, `upToDate`, `vaultDigest`; when lint errors stop it, `command`, `compiled`, `counts`, `findings`, `format`.
 
 ### coverage
 
-For each registered source, counts the spans in scope (all of them unless `_ruleset.yaml` narrows the scope), the spans cited and the spans not cited, and lists the spans cited in part only. A span counts as cited when a note cites it whole, cites each of its sentences, or, for a refused or structural note, cites a subtree that contains it. Notes that are pending or superseded do not count.
+For each registered source that no other registered source supersedes, counts the spans in scope (all of them unless `_ruleset.yaml` narrows the scope), the spans cited and the spans not cited, and lists the spans cited in part only. A span counts as cited when a note cites it whole, cites each of its sentences, or, for a refused or structural note, cites a subtree that contains it. Notes that are pending or superseded do not count. A source that a later edition supersedes is left out, because `migrate-edition` moves its citations on; `--source KEY` measures one source whether or not it is superseded.
 
 ```text
 usage: sabot coverage [-h] [--source KEY] [--vault PATH] [--json]
@@ -384,6 +384,8 @@ The example exits 0. Exit codes: 0 traversed; 3 refused (unknown note id, unknow
 
 **The vault argument.** Every command except `init` works on a vault named by `--vault PATH`, which defaults to the current directory. For `schema` the default is no vault, and the fixed schema is shown. `init` takes the directory to create instead. A directory without a `_ruleset.yaml` is not a vault and is refused with the code `not-a-vault`. `recover` takes `--vault` as well.
 
+**Loading a vault.** Every command except `lint`, `init` and `recover` reads the ruleset, the schema version it names and the ruleset's extensions the same way, and refuses with exit 3 a vault where that fails: `ruleset-invalid` for a ruleset that cannot be read or has an extension that cannot be merged (a key written twice is one such case), `schema-version-unsupported` for a schema version this tool does not read. `lint` reports the same conditions as findings, `init` has no vault yet and `recover` has to work on a vault that cannot be read.
+
 **`--json`.** Every command accepts `--json`, which makes standard output one JSON document with sorted keys, two-space indentation and a trailing line feed. Every document has `command` and `format` (the version of the output format, currently 1). Standard error carries human diagnostics only and no contract; in `--json` mode it is empty unless a note was skipped or a command has something to say about its input.
 
 **Exit codes.**
@@ -429,12 +431,13 @@ CI runs these on Linux, macOS and Windows with Python 3.12 and 3.15. Tests drive
 ```
 src/sabot_cli/
   cli.py            dispatcher; documents the shape every command module follows
+  canonical.py      canonical JSON and its types, below every package that writes JSON
   output.py         the only writer of stdout: canonical JSON, tables, the error object
   exit_codes.py     the exit codes
   commands/         one module per command, and the options and helpers they share
-  vault/            reads notes (front matter, wikilinks) and writes them in transactions; knows no rules
-  rules/            schema v1 (schema_v1.yaml), the ruleset file, lint checks, coverage, the compiled graph
-  sources/          text extraction, segmentation, span files, boundaries, edition diff, migration, overlap
+  vault/            reads notes (text files, front matter, wikilinks) and writes them in transactions; knows no rules
+  rules/            schema v1 (schema_v1.yaml), the ruleset file, lint checks, coverage, the compiled graph; imports sources and vault
+  sources/          text extraction, segmentation, span files, boundaries, edition diff, migration planning, overlap; imports only vault
   search/           property filters, full-text ranking, traversal; imports only vault
 tests/              pytest; the Driftwood fixture (fixtures/driftwood); shared helpers (support/)
 ci/                 content guard and its hash list

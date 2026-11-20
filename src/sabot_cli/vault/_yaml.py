@@ -19,6 +19,36 @@ _REPLACED_TAGS = frozenset(
 
 
 type _Loader = type[yaml.SafeLoader] | type[yaml.CSafeLoader]
+_MERGE_TAG = "tag:yaml.org,2002:merge"
+
+
+class _RefuseDuplicateKeys:
+    """Mixed into both loaders: a mapping that names a key twice is an error, not last-wins.
+
+    A note that says `status: refused` and later `status: mapped` has no single meaning, and
+    the stock loaders silently keep the second.
+    """
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[object, object]:
+        seen: set[object] = set()
+        for key_node, _ in node.value:
+            if key_node.tag == _MERGE_TAG:
+                continue
+            key = self.construct_object(key_node, deep=True)  # type: ignore[attr-defined]
+            try:
+                duplicate = key in seen
+                seen.add(key)
+            except TypeError:
+                # An unhashable key is the stock loader's own error to report.
+                continue
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    f"found the duplicate key {key!r}",
+                    key_node.start_mark,
+                )
+        return super().construct_mapping(node, deep=deep)  # type: ignore[misc, no-any-return]
 
 
 def _narrow_resolution(loader: _Loader) -> None:
@@ -33,7 +63,7 @@ def _narrow_resolution(loader: _Loader) -> None:
     loader.add_implicit_resolver("tag:yaml.org,2002:float", _FLOAT, list("-+0123456789."))
 
 
-class PureSafeStringLoader(yaml.SafeLoader):
+class PureSafeStringLoader(_RefuseDuplicateKeys, yaml.SafeLoader):
     """`yaml.SafeLoader` with the narrower scalar resolution described in the module."""
 
 
@@ -46,7 +76,7 @@ def _c_loader() -> type[yaml.CSafeLoader] | None:
     if not yaml.__with_libyaml__:
         return None
 
-    class CSafeStringLoader(yaml.CSafeLoader):
+    class CSafeStringLoader(_RefuseDuplicateKeys, yaml.CSafeLoader):
         """`yaml.CSafeLoader` with the same scalar resolution as the pure-Python loader."""
 
     _narrow_resolution(CSafeStringLoader)

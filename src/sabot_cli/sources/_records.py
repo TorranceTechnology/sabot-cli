@@ -3,10 +3,9 @@
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Literal
 
-from sabot_cli.output import JsonValue
+from sabot_cli.canonical import JsonValue
 from sabot_cli.sources._types import SourceError
 
 _RECORD_KEYS = frozenset(
@@ -114,16 +113,13 @@ def dump_compact(document: Mapping[str, JsonValue]) -> str:
     return _dump(document)
 
 
-def read_spans(path: Path) -> SpanIndex:
-    """Read a span file; raise `SourceError` `span-file-invalid` naming the first bad line."""
-    try:
-        text = path.read_bytes().decode("utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        raise SourceError("span-file-invalid", f"{path.name} cannot be read: {error}") from error
+def parse_spans(text: str, name: str) -> SpanIndex:
+    """Parse the text of a span file; raise `SourceError` `span-file-invalid` naming the first
+    bad line. `name` is the file's name, for the message."""
     records: list[SpanRecord] = []
     for number, line in enumerate(text.splitlines(), start=1):
         if line.strip():
-            records.append(_parse_record(path.name, number, line))
+            records.append(_parse_record(name, number, line))
     return SpanIndex(tuple(records))
 
 

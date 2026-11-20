@@ -238,8 +238,9 @@ def test_scope_prefix_holds_the_section_and_its_rules(
 
 
 def test_source_option_limits_the_report(run_cli: CliRunner, driftwood_vault: Path) -> None:
-    # Given two registered editions
+    # Given two registered sources, neither of which supersedes the other
     register_second_edition(driftwood_vault)
+    _rewrite_ruleset(driftwood_vault, "    supersedes: dw1\n", "")
 
     # When coverage runs for every source and then for one
     everything = _coverage(run_cli, driftwood_vault)
@@ -249,6 +250,42 @@ def test_source_option_limits_the_report(run_cli: CliRunner, driftwood_vault: Pa
     assert sorted(_sources(everything)) == ["dw1", "dw2"]
     assert sorted(_sources(one)) == ["dw1"]
     assert one.returncode == 0
+
+
+def test_a_superseded_source_is_measured_only_when_named(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given edition two registered as the successor of edition one, which is fully cited
+    register_second_edition(driftwood_vault)
+
+    # When coverage runs for every source and then for the old edition by name
+    everything = _coverage(run_cli, driftwood_vault)
+    named = _coverage(run_cli, driftwood_vault, "--source", "dw1")
+
+    # Then the default report leaves the superseded edition out, and naming it measures it
+    assert sorted(_sources(everything)) == ["dw2"]
+    assert sorted(_sources(named)) == ["dw1"]
+    assert named.returncode == 0
+
+
+def test_a_chain_of_editions_is_measured_at_its_last_link(
+    run_cli: CliRunner, driftwood_vault: Path
+) -> None:
+    # Given three editions, each registered as the successor of the one before
+    register_second_edition(driftwood_vault)
+    spans = driftwood_vault / "spans"
+    (spans / "dw3.jsonl").write_bytes((spans / "dw2.jsonl").read_bytes().replace(b"dw2", b"dw3"))
+    _rewrite_ruleset(
+        driftwood_vault,
+        "    supersedes: dw1\n",
+        "    supersedes: dw1\n  - key: dw3\n    note: src.dw2\n    supersedes: dw2\n",
+    )
+
+    # When coverage runs for every source
+    result = _coverage(run_cli, driftwood_vault)
+
+    # Then only the last edition is measured
+    assert sorted(_sources(result)) == ["dw3"]
 
 
 def test_a_registered_source_without_a_scope_entry_is_wholly_in_scope(

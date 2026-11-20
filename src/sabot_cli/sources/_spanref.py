@@ -9,11 +9,10 @@ locator, because that segment reads as a sentence; locators are refused when the
 import re
 from dataclasses import dataclass
 
-from sabot_cli.sources._types import SOURCE_KEY_PATTERN
+from sabot_cli.sources._types import is_source_key
 
 _SEGMENT = r"[a-z0-9]+(?:[.-][a-z0-9]+)*"
 _LOCATOR = re.compile(rf"{_SEGMENT}(?:/{_SEGMENT})*")
-_SOURCE_KEY = re.compile(SOURCE_KEY_PATTERN)
 _SENTENCE_SEGMENT = re.compile(r"s[1-9][0-9]*")
 _SENTENCE_LIKE = re.compile(r"s[0-9]+")
 
@@ -36,6 +35,28 @@ class SpanRef:
         """The `<source>#<locator>` form of the span itself, as a span file spells it."""
         return f"{self.source}#{self.locator}"
 
+    @property
+    def record_span(self) -> str:
+        """The `span` of the span-file record the reference names: the span, or one sentence."""
+        return self.span if self.sentence is None else sentence_locator(self.span, self.sentence)
+
+
+def sentence_locator(locator: str, number: int) -> str:
+    """The locator of sentence `number` of a span, as a span file records it."""
+    return f"{locator}/s{number}"
+
+
+def sentence_number(locator: str) -> int | None:
+    """The `n` of a `<span>/s<n>` sentence locator, or None when it is not one."""
+    head, slash, tail = locator.rpartition("/")
+    return int(tail[1:]) if slash and head and _SENTENCE_SEGMENT.fullmatch(tail) else None
+
+
+def locator_under(locator: str, prefix: str) -> bool:
+    """Whether a locator is the prefix or continues it at a `.` or `/` boundary, so `1` holds
+    `1.1` and `1/a` but not `10`."""
+    return locator == prefix or locator.startswith((f"{prefix}.", f"{prefix}/"))
+
 
 def locator_problem(locator: str) -> str | None:
     """Why a string cannot be a locator, or None when it can."""
@@ -49,7 +70,7 @@ def locator_problem(locator: str) -> str | None:
 def parse_span_ref(ref: str) -> SpanRef:
     """Parse one span reference; raise `SpanRefError` when it does not fit the grammar."""
     source, separator, rest = ref.partition("#")
-    if not separator or not _SOURCE_KEY.fullmatch(source):
+    if not separator or not is_source_key(source):
         raise SpanRefError("a span reference is <source-key>#<locator>")
     sentence: int | None = None
     subtree = False

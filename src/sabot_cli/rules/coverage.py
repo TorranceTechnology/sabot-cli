@@ -5,8 +5,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from sabot_cli.rules._checks._spans_shim import SpanIndex, SpanRecord, parse_span_ref
 from sabot_cli.rules.ruleset import Ruleset
+from sabot_cli.sources import (
+    SpanIndex,
+    SpanRecord,
+    ancestry,
+    in_scope,
+    parse_span_ref,
+    sentence_number,
+)
 from sabot_cli.vault import Note, Vault
 
 __all__ = ["CoverageReport", "PartialSpan", "SourceCoverage", "coverage"]
@@ -91,21 +98,21 @@ def _source_coverage(
     for record in records:
         if record.kind == "sentence" and record.parent is not None:
             sentences_of[record.parent].append(record.locator)
-    in_scope = [
+    scoped = [
         record
         for record in records
-        if record.kind == "span" and _in_scope(record, by_locator, scope)
+        if record.kind == "span" and in_scope(record, by_locator, scope)
     ]
     cited = 0
     uncited: list[str] = []
     partial: list[PartialSpan] = []
-    for record in in_scope:
+    for record in scoped:
         if _covered_whole(record, by_locator, citations):
             cited += 1
             continue
         sentences = sentences_of.get(record.locator, [])
         numbers = citations.sentences.get(record.locator, frozenset())
-        given = [locator for locator in sentences if _sentence_number(locator) in numbers]
+        given = [locator for locator in sentences if sentence_number(locator) in numbers]
         if sentences and len(given) == len(sentences):
             cited += 1
         elif given:
@@ -115,7 +122,7 @@ def _source_coverage(
             uncited.append(f"{key}#{record.locator}")
     return SourceCoverage(
         key=key,
-        in_scope=len(in_scope),
+        in_scope=len(scoped),
         cited=cited,
         uncited=tuple(uncited),
         partial=tuple(partial),
@@ -165,40 +172,9 @@ def _source_entries(note: Note) -> list[str]:
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
-def _ancestry(record: SpanRecord, by_locator: Mapping[str, SpanRecord]) -> list[str]:
-    """The locators of the record and of each ancestor, nearest first."""
-    locators: list[str] = []
-    current: SpanRecord | None = record
-    while current is not None and current.locator not in locators:
-        locators.append(current.locator)
-        current = by_locator.get(current.parent) if current.parent is not None else None
-    return locators
-
-
 def _covered_whole(
     record: SpanRecord, by_locator: Mapping[str, SpanRecord], citations: _Citations
 ) -> bool:
     if record.locator in citations.whole:
         return True
-    return any(locator in citations.subtrees for locator in _ancestry(record, by_locator))
-
-
-def _in_scope(
-    record: SpanRecord, by_locator: Mapping[str, SpanRecord], scope: Sequence[str]
-) -> bool:
-    if not scope:
-        return True
-    return any(
-        _under(locator, prefix) for locator in _ancestry(record, by_locator) for prefix in scope
-    )
-
-
-def _under(locator: str, prefix: str) -> bool:
-    """Whether a locator is the prefix or continues it at a `.` or `/` boundary, so `1` holds
-    `1.1` and `1/a` but not `10`."""
-    return locator == prefix or locator.startswith((f"{prefix}.", f"{prefix}/"))
-
-
-def _sentence_number(locator: str) -> int:
-    """The `n` of a sentence record's `<span>/s<n>` locator."""
-    return int(locator.rsplit("/s", 1)[1])
+    return any(locator in citations.subtrees for locator in ancestry(record, by_locator))

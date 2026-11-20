@@ -1,5 +1,6 @@
 """Names shared by every module of `sources`: the literals, the refusal and the plain results."""
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -7,7 +8,8 @@ type SourceFormat = Literal["pdf", "html", "text"]
 type SegmentMode = Literal["numbered", "headings", "sentences", "boundaries"]
 type Numbering = Literal["dotted", "dotted-letter"]
 
-SOURCE_KEY_PATTERN = r"[a-z0-9][a-z0-9.-]*"
+SPANS_DIRECTORY = "spans"
+_SOURCE_KEY = re.compile(r"[a-z0-9][a-z0-9.-]*")
 
 
 class SourceError(Exception):
@@ -17,6 +19,27 @@ class SourceError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def span_file_relative(key: str, *, boundaries: bool = False) -> str:
+    """The vault-relative path of a source's span file, or of its boundaries file."""
+    return f"{SPANS_DIRECTORY}/{key}{'.boundaries' if boundaries else ''}.jsonl"
+
+
+def is_source_key(text: str) -> bool:
+    """Whether `text` is a source key: lowercase letters, digits, dots and hyphens, starting
+    with a letter or digit. This is the one place the rule is written."""
+    return _SOURCE_KEY.fullmatch(text) is not None
+
+
+def check_key(key: str) -> str:
+    """The key itself, or `SourceError` `source-key-invalid`."""
+    if not is_source_key(key):
+        raise SourceError(
+            "source-key-invalid",
+            "a source key is lowercase letters, digits, . and -, starting with a letter or digit",
+        )
+    return key
 
 
 @dataclass(frozen=True)

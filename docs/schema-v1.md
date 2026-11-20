@@ -41,7 +41,7 @@ The three sides of the graph, named by the `side` of each node type, are the sou
 
 ## The note
 
-A note is a Markdown file: a YAML mapping between two lines that hold only `---`, then the body. The file name without `.md` equals the note's `id`.
+A note is a Markdown file: a YAML mapping between two lines that hold only `---`, then the body. The file name without `.md` equals the note's `id`. A key may appear once in the mapping, at any depth: a note that writes `status` twice is refused (`frontmatter-invalid`) rather than read as its last value.
 
 The body follows one convention:
 
@@ -94,7 +94,7 @@ At the moor phase a hand larger than seven is cut down to seven by discarding.
 
 | Attribute | Type | Rule |
 |---|---|---|
-| `id` | id | Lowercase letters, digits and hyphens in parts separated by dots, starting with a letter (`^[a-z][a-z0-9-]*(\.[a-z0-9-]+)*$`). Stable and never reused. Equals the file name without `.md` and starts with the prefix of the note's type. |
+| `id` | id | Lowercase letters, digits and hyphens in parts separated by dots, starting with a letter (`^[a-z][a-z0-9-]*(\.[a-z0-9-]+)*$`). Stable and never reused. Equals the file name without `.md` and starts with the prefix of the note's type. The part before the first dot may not be a name Windows reserves for a device (`con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`, in any letter case), because a note file is named for its id and could not be checked out there (`id-reserved-name`). |
 | `type` | enum | A node type: a fixed type below or one the ruleset declares. |
 | `title` | text | A short label in the author's own words. |
 | `status` | enum | One of `mapped`, `refused`, `derived`, `structural`, `pending`, `superseded`. |
@@ -368,7 +368,7 @@ The id of a note starts with the prefix of its type. The id and the file name mu
 | `replacement-pattern` | `rpl.` | model | A class of event that an effect can replace. |
 | `ongoing-pattern` | `og.` | model | A class of lasting modification and where it applies in order. |
 | `relation` | `rel.` | model | An edge written as a note so it can carry qualifiers. |
-| `construct` | `con.` | build | A named artefact of the generated game. |
+| `construct` | `cst.` | build | A named artefact of the generated game. |
 | `test-obligation` | `to.` | build | A requirement for a test, normally generated. |
 
 ## Edge types
@@ -529,7 +529,7 @@ extensions:
 |---|---|
 | `ruleset` | The ruleset's id. Lowercase letters, digits and hyphens, starting with a letter. |
 | `schemaVersion` | The schema version; 1. Each note's `schema` must equal it. |
-| `sources` | The registered sources. Each entry has `key` (the source key), `note` (the id of its source note, which must exist) and optionally `supersedes` (the key of a registered source it replaces, never its own). Keys are unique. `ingest` adds an entry as text after the last source, so comments and layout elsewhere in the file are kept. |
+| `sources` | The registered sources. Each entry has `key` (the source key), `note` (the id of its source note, which must exist) and optionally `supersedes` (the key of a registered source it replaces, never its own). Keys are unique. The note must be a source note whose `key` is the entry's `key` and whose `supersedes` is the entry's `supersedes`, or both have none. `ingest` adds an entry as text after the last source, so comments and layout elsewhere in the file are kept. |
 | `scope` | For each source key, the locator prefixes that are in scope for coverage. An empty list, or no entry, puts the whole source in scope. A prefix covers the span with that locator and spans beneath it, so `4` covers `4`, `4.1` and `4/a`, and does not cover `40`. Every key must be registered. This is not the note-level `scope` attribute, which lists variants. |
 | `extensions` | Additions to the fixed schema; see below. |
 
@@ -614,7 +614,7 @@ The `kind` says what the document is:
 - `errata` corrects an edition. Register it as its own source with `ingest --kind errata --amends <key>`; the new note records `amends`. Notes cite its spans under its own key, so the correction and the text it corrects stay separate. `amends` is recorded on the note only; `_ruleset.yaml` has no field for it, and `lint` does not read it.
 - `ruling` and `faq` are published decisions and answers kept as sources in the same way. They are not the `ruling` node type, which is a note about one decision.
 
-Every source has its own span file, written by `segment` after `ingest`. A registered source whose span file is absent makes `coverage` refuse. The original file stays outside the vault; `ingest --verify` compares a file with the registered hash.
+Every source has its own span file, written by `segment` after `ingest`. A registered source whose span file is absent makes `coverage` refuse. `coverage` leaves out a source that another registered source supersedes, unless it is named with `--source`. The original file stays outside the vault; `ingest --verify` compares a file with the registered hash.
 
 ## Lint classes
 
@@ -622,12 +622,13 @@ Every source has its own span file, written by `segment` after `ingest`. A regis
 
 | Class | Severity | What it refuses |
 |---|---|---|
-| `frontmatter-invalid` | error | A note whose front matter is missing, not closed, not YAML, not a mapping with text keys, or whose file is not UTF-8. The note is not loaded. |
+| `frontmatter-invalid` | error | A note whose front matter is missing, not closed, not YAML, not a mapping with text keys, names a key more than once, or whose file is not UTF-8. The note is not loaded. |
 | `required-missing` | error | A required attribute that is absent, null, empty text or an empty list. |
 | `id-malformed` | error | An `id` that is not text or does not match the id pattern. |
 | `id-file-mismatch` | error | An `id` that differs from the file name without `.md`. |
 | `id-duplicate` | error | Two notes with one id. The later one in path order is reported and not loaded. |
 | `id-prefix-mismatch` | error | An `id` that does not start with the prefix of the note's type. |
+| `id-reserved-name` | error | An `id`, or a note file name, whose first dot-separated part is a Windows device name. |
 | `type-unknown` | error | A `type` that is neither a fixed node type nor declared. |
 | `enum-invalid` | error | A value of the wrong kind or outside the allowed values: text, `YYYY-MM-DD` date, whole number (with its minimum), true or false, an enum value, or a list element of the wrong kind. |
 | `attribute-unknown` | error | A key that is not an attribute, edge name or inverse name, or an attribute on a node type it is not allowed on. |
@@ -646,7 +647,7 @@ Every source has its own span file, written by `segment` after `ingest`. A regis
 | `restates-conflicts-pair` | error | One pair of clauses joined by both `restates` and `conflicts-with`. |
 | `superseded-without-successor` | error | A `superseded` note with no `refines` or `resolved-by` edge. |
 | `schema-version-mismatch` | error | A note whose `schema` differs from the ruleset's `schemaVersion`. |
-| `ruleset-invalid` | error | A `_ruleset.yaml` that cannot be read, has unknown keys, has a wrong schema version, an unregistered or missing source, or an extension that breaks the rules above. |
+| `ruleset-invalid` | error | A `_ruleset.yaml` that cannot be read, names a key twice, has unknown keys, has a wrong schema version, an unregistered or missing source, a source whose note is not a source note or has another `key` or another `supersedes`, or an extension that breaks the rules above. |
 | `transaction-incomplete` | error | A journal directory (`.sabot-txn-*`) or a staged file (`.sabot-new-*`) left at the vault by a write that was killed. `sabot recover` rolls it back. |
 | `quotation-long` | error | A quoted run of 60 or more characters in a body: paraphrase it. |
 | `overrides-and-exception` | warning | One pair of notes joined by both `overrides` and `exception-to`. |
@@ -661,7 +662,7 @@ Every source has its own span file, written by `segment` after `ingest`. A regis
 
 ## From the graph to a conformance clause list
 
-`sabot compile` writes `_index/graph.json`: every note as a node with its type, path, attributes and compiled paraphrase, every authored edge, every derived inverse edge, the ruleset's extensions and a digest of the vault. It refuses a vault with lint errors. `compile --check` exits 1 when the written graph is out of date.
+`sabot compile` writes `_index/graph.json`: every note as a node with its type, path, attributes and compiled paraphrase, every authored edge, every derived inverse edge, the ruleset's extensions and a digest of the vault: the notes, `_ruleset.yaml` and the `*.jsonl` files directly in `spans/`, so a hidden or stray file there does not change it. It refuses a vault with lint errors. `compile --check` exits 1 when the written graph is out of date.
 
 No command in this repository writes a conformance clause list or a classification manifest yet. This section states how the note attributes are meant to map onto them, as the consumer repositories of the engine carry them, so that a generator and an author agree. Check it against the generator when one exists.
 
@@ -681,11 +682,11 @@ No command in this repository writes a conformance clause list or a classificati
 
 **Surface classification.** The classification manifest has one entry per element of the game definition, keyed `<kind>:<name>` such as `command:launch-boat`. A `construct` note supplies the element: `surface` is its element id and `construct` lists the engine construct kinds it stands for. The entry's `classification` is `MAPPED` with the `fixtures` of the construct's test obligations, or `REFUSED` with a `reason`. A deliberately unsupported part of the rules is a `scope:<name>` entry, always `REFUSED`: the `scope-key` of a refused note names the entry the note accounts for and its `refusal` is the reason.
 
-File `build/constructs/con.launch-boat-command.md`, a construct that stands for the element `command:launch-boat`:
+File `build/constructs/cst.launch-boat-command.md`, a construct that stands for the element `command:launch-boat`:
 
 ```markdown
 ---
-id: con.launch-boat-command
+id: cst.launch-boat-command
 type: construct
 title: Launch command
 status: derived
@@ -750,7 +751,7 @@ requires:
 triggers:
   - "[[tp.boat-launched]]"
 implemented-by:
-  - "[[con.launch-boat-command]]"
+  - "[[cst.launch-boat-command]]"
 tested-by:
   - "[[to.launch-boat]]"
 ---
@@ -779,7 +780,7 @@ The loop, in six steps, with `<old>` and `<new>` the source keys:
 3. **Read the differences.** `sabot diff-editions <old> <new> --old-text <file> --new-text <file>` classifies each span as unchanged, editorial, substantive, added, removed or moved, and lists the notes to re-review.
 4. **Migrate the citations.** `sabot migrate-edition <old> <new> --dry-run`, then again without `--dry-run`. Clean and editorial citations move to `<new>`; affected notes are marked stale.
 5. **Review each stale note.** Read the new span, correct the paraphrase if the meaning changed, point the citations at `<new>`, raise `rev`, and delete the `stale` and `stale-reason` lines. Write notes for added spans.
-6. **Check the result.** `sabot lint --strict` must be clean, `sabot coverage --source <new>` must show every in-scope span cited, and `sabot compile` writes the new graph.
+6. **Check the result.** `sabot lint --strict` must be clean, `sabot coverage` must show every in-scope span cited (it leaves out `<old>`, which `<new>` supersedes; `--source <old>` measures it anyway), and `sabot compile` writes the new graph.
 
 ## Language limits
 
